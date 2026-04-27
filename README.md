@@ -1,11 +1,11 @@
-# NW London Population Health - Bi-Borough Neighbourhood Map
+# NW London Population Health Mapping
 
 Interactive Leaflet map + a single-file Python script that refreshes it.
-Covers the 9 NW London local authorities: Brent, Camden, Ealing,
+Covers the 8 NW London ICS local authorities: Brent, Ealing,
 Hammersmith & Fulham, Harrow, Hillingdon, Hounslow, Kensington & Chelsea,
 City of Westminster.
 
-Live map: https://harv334.github.io/Bi-Borough-Neighbourhood-map/
+Live map: https://harv334.github.io/NW-PH-Mapping/
 
 ## What's in this repo
 
