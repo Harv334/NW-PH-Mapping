@@ -64,9 +64,6 @@
 
   /* ── "Currently viewing" strip + filter chips (above the map) ── */
   .viewing-strip { background: #fff; border-bottom: 1px solid #ececec; padding: 5px 12px 6px; font-size: 11.5px; color: #555; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 10px; row-gap: 2px; align-items: center; flex-shrink: 0; }
-  /* ── Borough name labels (zoom 9-11) ── */
-  .borough-label { background: transparent !important; border: none !important; pointer-events: none; }
-  .borough-label span { display: inline-block; padding: 2px 7px; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: rgba(40,40,40,.78); background: rgba(255,255,255,.55); border-radius: 3px; text-shadow: 0 1px 2px rgba(255,255,255,.6); white-space: nowrap; }
   /* ── Persistent map legend strip ── */
   .map-legend-strip { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,.94); border: 1px solid #d4d4d4; border-radius: 6px; padding: 6px 12px; box-shadow: 0 2px 8px rgba(0,0,0,.10); font-size: 11px; color: #444; display: flex; align-items: center; gap: 10px; z-index: 540; pointer-events: none; max-width: 90%; }
   .map-legend-strip .mls-label { font-weight: 600; color: #222; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2138,58 +2135,6 @@ const boroughL = L.geoJSON(BOROUGH_GJ, {
 });
 // Borough outlines start off — user toggles via 'NW London boroughs' checkbox
 
-// ── Borough name labels (zoom 9-11 only) ─────────────────────────────────
-// Static, semi-transparent labels at each borough's centroid so users can
-// orient at low zoom without cluttering the map at ward zoom. Auto-toggle
-// based on map zoom level. Non-interactive (pointer-events: none) so they
-// never steal hover/click events from the wards underneath.
-const boroughLabels = L.layerGroup();
-(function _buildBoroughLabels() {
-  if (typeof BOROUGH_GJ === 'undefined' || !BOROUGH_GJ.features) return;
-  // Cheap centroid: average of all coordinates. Good enough for label placement.
-  const centroidOf = (g) => {
-    const pts = [];
-    const walk = (x) => {
-      if (typeof x[0] === 'number') { pts.push(x); return; }
-      x.forEach(walk);
-    };
-    walk(g.coordinates);
-    if (!pts.length) return null;
-    const lng = pts.reduce((s,p) => s + p[0], 0) / pts.length;
-    const lat = pts.reduce((s,p) => s + p[1], 0) / pts.length;
-    return [lat, lng];
-  };
-  BOROUGH_GJ.features.forEach(f => {
-    const name = f.properties && f.properties.name;
-    if (!name) return;
-    const c = centroidOf(f.geometry);
-    if (!c) return;
-    const lbl = L.marker(c, {
-      icon: L.divIcon({
-        className: 'borough-label',
-        html: `<span>${name}</span>`,
-        iconSize: [120, 18],
-        iconAnchor: [60, 9],
-      }),
-      interactive: false,
-      keyboard: false,
-    });
-    boroughLabels.addLayer(lbl);
-  });
-})();
-function _refreshBoroughLabels() {
-  const z = map.getZoom();
-  const shouldShow = z >= 9 && z <= 11;
-  if (shouldShow && !boroughLabels._map) {
-    boroughLabels.addTo(map);
-  } else if (!shouldShow && boroughLabels._map) {
-    map.removeLayer(boroughLabels);
-  }
-}
-map.on('zoomend', _refreshBoroughLabels);
-// Run once on load so labels appear at the initial zoom if appropriate.
-setTimeout(_refreshBoroughLabels, 100);
-
 // ── NW London context wards layer ────────────────────────────────────────────
 // Legacy layer kept for backwards compat; the 'NW London wards' toggle now drives
 // `wardBoundaryLyr` below (black outlines on the full GJ ward set).
@@ -3480,7 +3425,11 @@ window.generateWardReport = function(wn) {
   function _chartRadar(axes, opts) {
     opts = opts || {};
     const size = opts.size || 220;
-    const cx = size / 2, cy = size / 2 + 4;
+    // Pad the viewBox so axis labels ("Employment", "Environment", …) sit in
+    // their own margin and don't clip at the edge.
+    const pad  = opts.pad || 56;
+    const W    = size + pad * 2;
+    const cx = W / 2, cy = W / 2 + 4;
     const R  = size * 0.36;
     const N  = axes.length;
     const data = axes.map(a => ({...a, v: a.v == null ? null : parseFloat(a.v), max: parseFloat(a.max) || 1}));
@@ -3490,7 +3439,7 @@ window.generateWardReport = function(wn) {
       return [cx + Math.cos(a) * R * Math.max(0, Math.min(1, frac)),
               cy + Math.sin(a) * R * Math.max(0, Math.min(1, frac))];
     };
-    let svg = `<svg viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg" class="ch-radar">`;
+    let svg = `<svg viewBox="0 0 ${W} ${W}" xmlns="http://www.w3.org/2000/svg" class="ch-radar">`;
     // Concentric grid rings (4 rings = 25/50/75/100% of axis max)
     [0.25, 0.5, 0.75, 1.0].forEach(frac => {
       const pts = data.map((_, i) => pt(i, frac).join(',')).join(' ');
@@ -4873,7 +4822,10 @@ window.generateLSOAReport = function(code) {
   }
   function _chartRadar(axes, opts) {
     opts = opts || {};
-    const size = opts.size || 220, cx = size/2, cy = size/2 + 4, R = size * 0.36;
+    const size = opts.size || 220;
+    const pad  = opts.pad || 56;
+    const W    = size + pad * 2;
+    const cx = W/2, cy = W/2 + 4, R = size * 0.36;
     const N = axes.length;
     const data = axes.map(a => ({...a, v: a.v == null ? null : parseFloat(a.v), max: parseFloat(a.max) || 1}));
     const angle = i => -Math.PI/2 + (i / N) * 2 * Math.PI;
@@ -4882,7 +4834,7 @@ window.generateLSOAReport = function(code) {
       return [cx + Math.cos(a) * R * Math.max(0, Math.min(1, frac)),
               cy + Math.sin(a) * R * Math.max(0, Math.min(1, frac))];
     };
-    let svg = `<svg viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg" class="ch-radar">`;
+    let svg = `<svg viewBox="0 0 ${W} ${W}" xmlns="http://www.w3.org/2000/svg" class="ch-radar">`;
     [0.25, 0.5, 0.75, 1.0].forEach(frac => {
       const pts = data.map((_, i) => pt(i, frac).join(',')).join(' ');
       svg += `<polygon points="${pts}" fill="none" stroke="#e8e8e2" stroke-width="0.8"/>`;
