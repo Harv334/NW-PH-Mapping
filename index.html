@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NW London Neighbourhood Map</title>
+<title>London Population Health Mapping</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css">
@@ -298,8 +298,8 @@
   <div class="hdr">
     <div class="hdr-left">
       <div>
-        <div class="hdr-logo">Westminster Neighbourhood Map</div>
-        <div class="hdr-sub">9 boroughs · 188 wards · loading VCSE organisations...</div>
+        <div class="hdr-logo">London Population Health Mapping</div>
+        <div class="hdr-sub" title="Click a ward to open its profile · use the Overlay tab to colour the map by an indicator · the VCSE tab maps charities and Community Interest Companies">Click a ward for its profile · pick an Overlay to colour-code · point layers in the sidebar</div>
       </div>
     </div>
     <div class="hdr-right">
@@ -350,8 +350,8 @@
               <div style="width:10px;height:10px;background:#00897B;border-radius:2px;align-self:center"></div><span>Other sports facility</span>
             </div>
           </div>
-          <label class="lrow"><div class="ldot" style="background:#854F0B"></div><span class="lname">VCSE organisations <span class="lcount">...</span></span><input type="checkbox" id="tv"></label>
-          <label class="lrow"><div class="ldot" style="background:#5C5C8A"></div><span class="lname">Community Interest Companies <span class="lcount" id="cic-count">...</span></span><input type="checkbox" id="tcic"></label>
+          <!-- VCSE + CIC toggles moved to the VCSE tab; they're the only place to enable them now. -->
+
           <label class="lrow"><div class="ldot" style="background:#7B2D8E"></div><span class="lname">Dental practices <span class="lcount" id="dental-count">0</span></span><input type="checkbox" id="td"></label>
           <div id="dental-filter-wrap" style="margin:2px 0 4px 16px">
             <select id="dental-contract-filter" style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:5px;font-size:11px;color:#333;background:#fff">
@@ -450,13 +450,6 @@
           </label>
           <div style="font-size:10.5px;color:#888;margin:4px 0 2px 24px;line-height:1.4">
             VCSE = registered charities · CIC = Community Interest Companies (community-anchored businesses)
-          </div>
-        </div>
-        <div class="sb-sec" style="padding-bottom:8px">
-          <div class="sb-lbl">Filter by cause</div>
-          <div id="cause-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px"></div>
-          <div style="font-size:10.5px;color:#888;line-height:1.4">
-            Click chips to toggle. Affects both layers.
           </div>
         </div>
         <div class="sb-sec" style="padding-bottom:8px">
@@ -2193,8 +2186,7 @@ function wireVCSE(records) {
   });
   const cnt = document.getElementById('vcse-count');
   if (cnt) cnt.textContent = `${n.toLocaleString()} mappable (of ${tot.toLocaleString()} declared)`;
-  const hdrSub = document.querySelector('.hdr-sub');
-  if (hdrSub) hdrSub.textContent = `9 boroughs · 188 wards · ${n.toLocaleString()} mappable VCSE organisations`;
+  // (subtitle is now a static how-it-works hint set in HTML — don't overwrite)
   _vcseLoadedOnce = true;
   console.log(`VCSE loaded: ${n} pinned / ${tot} total`);
   // Populate the tag-filter checkboxes now that VCSE_ALL is ready.
@@ -2323,6 +2315,10 @@ function applyCICFilter() {
 
 // ── Cause-filter chips (shared by VCSE + CIC) ────────────────────────────
 function buildCauseChips() {
+  // Cause chips were removed from the UI; this is a no-op now. Kept as a stub
+  // so other code paths that call it (e.g. the data-loaded hook) don't error.
+  return;
+  // unreachable below
   const host = document.getElementById('cause-chips');
   if (!host || typeof VCSE_BUCKET_LABELS !== 'object') return;
   // Only show buckets that actually have at least one record across both layers.
@@ -4397,7 +4393,7 @@ function _setVcseLayerVisible(on) {
   if (a && a.checked !== !!on) a.checked = !!on;
   if (b && b.checked !== !!on) b.checked = !!on;
 }
-document.getElementById('tv').addEventListener('change', e => _setVcseLayerVisible(e.target.checked));
+{ const _tv2 = document.getElementById('tv'); if (_tv2) _tv2.addEventListener('change', e => _setVcseLayerVisible(e.target.checked)); }
 {
   const vt = document.getElementById('vcse-tab-toggle');
   if (vt) vt.addEventListener('change', e => _setVcseLayerVisible(e.target.checked));
@@ -4672,6 +4668,7 @@ function showLSOA(feat) {
       <button class="deselect-btn" onclick="deselectLSOA()" title="Deselect this LSOA">Deselect &times;</button>
     </div>
     <div class="wname">${props.name} <span class="wpop">${code}</span></div>
+    <button class="wbtn" onclick='generateLSOAReport(${JSON.stringify(code)})'>Generate LSOA report ↗</button>
     <div class="cat-block">
       <div class="cat-hdr" onclick="toggleCat(this)">
         <span class="cat-hdr-l"><span class="cat-ico">£</span>IMD 2025 Deprivation</span>
@@ -4697,9 +4694,6 @@ function showLSOA(feat) {
     <div class="data-note">
       <span class="gpill gpill-ward">lsoa</span> = LSOA level<br>
       Click a ward polygon for full ward-level data.
-    </div>
-    <div style="margin-top:10px">
-      <button class="wbtn" onclick='generateLSOAReport(${JSON.stringify(code)})'>Generate LSOA report ↗</button>
     </div>`;
 }
 
