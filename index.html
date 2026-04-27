@@ -15,7 +15,7 @@
   /* ── Layout ── */
   /* Root layout uses CSS grid (not flex) — grid rows are mathematically rigid so the header/main/status bar cannot be pushed out of their slots. */
   .app { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100vh; max-height: 100vh; overflow: hidden; }
-  .hdr { background: #fff; border-bottom: 1px solid #e5e5e0; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .hdr { background: #fafafa; border-bottom: 1px solid #ececec; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 12px; }
   .hdr-left { display: flex; align-items: center; gap: 12px; }
   .hdr-logo { font-size: 15px; font-weight: 600; color: #1a1a1a; }
   .hdr-sub { font-size: 12px; color: #666; margin-top: 1px; }
@@ -63,8 +63,20 @@
   .hsr-empty { padding: 14px 10px; font-size: 11.5px; color: #888; text-align: center; }
 
   /* ── "Currently viewing" strip + filter chips (above the map) ── */
-  .viewing-strip { background: #fff; border-bottom: 1px solid #e5e5e0; padding: 6px 12px; font-size: 11.5px; color: #555; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 34px; flex-shrink: 0; }
-  .vs-label { font-weight: 600; color: #888; letter-spacing: .05em; text-transform: uppercase; font-size: 9.5px; flex-shrink: 0; }
+  .viewing-strip { background: #fff; border-bottom: 1px solid #ececec; padding: 5px 12px 6px; font-size: 11.5px; color: #555; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 10px; row-gap: 2px; align-items: center; flex-shrink: 0; }
+  /* ── Borough name labels (zoom 9-11) ── */
+  .borough-label { background: transparent !important; border: none !important; pointer-events: none; }
+  .borough-label span { display: inline-block; padding: 2px 7px; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: rgba(40,40,40,.78); background: rgba(255,255,255,.55); border-radius: 3px; text-shadow: 0 1px 2px rgba(255,255,255,.6); white-space: nowrap; }
+  /* ── Persistent map legend strip ── */
+  .map-legend-strip { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,.94); border: 1px solid #d4d4d4; border-radius: 6px; padding: 6px 12px; box-shadow: 0 2px 8px rgba(0,0,0,.10); font-size: 11px; color: #444; display: flex; align-items: center; gap: 10px; z-index: 540; pointer-events: none; max-width: 90%; }
+  .map-legend-strip .mls-label { font-weight: 600; color: #222; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .map-legend-strip .mls-min, .map-legend-strip .mls-max { font-variant-numeric: tabular-nums; color: #666; min-width: 34px; }
+  .map-legend-strip .mls-min { text-align: right; }
+  .map-legend-strip .mls-grad { width: 140px; height: 8px; border-radius: 3px; border: 1px solid #ccc; }
+  .viewing-strip .vs-row1 { display: contents; }
+  .viewing-strip .vs-row2 { grid-column: 1 / -1; min-height: 0; }
+  .viewing-strip .vs-row2:empty { display: none; }
+  .vs-label { font-weight: 600; color: #888; letter-spacing: .05em; text-transform: uppercase; font-size: 9.5px; flex-shrink: 0; align-self: center; }
   .vs-digest { color: #333; font-weight: 500; }
   .vs-digest b { color: #185FA5; font-weight: 600; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
@@ -174,9 +186,9 @@
   .keystat-val { font-size: 15px; font-weight: 600; color: #1a1a1a; margin-top: 3px; line-height: 1.1; }
   .keystat-val.dim { color: #bbb; font-weight: 400; }
   .keystat-sub { font-size: 9px; color: #999; margin-top: 1px; }
-  .wbtn { display: block; width: 100%; padding: 8px 10px; margin: 6px 0 10px; background: #185FA5; color: #fff; border: none; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; transition: background .15s; }
-  .wbtn:hover { background: #0f4b85; }
-  .wbtn:active { background: #0a3a6a; }
+  .wbtn { display: block; width: 100%; padding: 9px 12px; margin: 8px 0 14px; background: #fff; color: #185FA5; border: 1.5px solid #185FA5; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s, box-shadow .15s; letter-spacing: .01em; }
+  .wbtn:hover { background: #185FA5; color: #fff; box-shadow: 0 2px 6px rgba(24,95,165,.25); }
+  .wbtn:active { background: #0a3a6a; color: #fff; border-color: #0a3a6a; }
 
   /* ── Overlay scale ── */
   .scale-bar { display: none; margin-top: 8px; }
@@ -812,7 +824,16 @@
       <div class="viewing-strip" id="viewing-strip">
         <span class="vs-label">Viewing</span>
         <span class="vs-digest" id="vs-digest">All of NW London</span>
-        <span class="chips" id="filter-chips"></span>
+        <span class="chips vs-row2" id="filter-chips"></span>
+      </div>
+      <!-- Persistent legend strip — shows the active overlay's name + colour scale + min/max
+           at the bottom of the map. Hidden when no overlay is active. Mirrors the sidebar
+           scale-bar via the same data, so users can read the choropleth without scrolling. -->
+      <div id="map-legend-strip" class="map-legend-strip" style="display:none">
+        <span class="mls-label" id="mls-label"></span>
+        <span class="mls-min" id="mls-min"></span>
+        <span class="mls-grad" id="mls-grad"></span>
+        <span class="mls-max" id="mls-max"></span>
       </div>
       <div class="loading-overlay" id="ldr">
         <div class="spin"></div>
@@ -1958,14 +1979,15 @@ const BOROUGH_GJ = {"type":"FeatureCollection","features":[{"type":"Feature","pr
 // ═══════════════════════════════════════════════════════════════════════════
 // Start zoomed out at NW London ward level — fitBounds on wLyr refines once wards load.
 const map = L.map('map', { center:[51.540,-0.300], zoom:10, zoomControl:true });
-// OpenStreetMap basemap. crossOrigin:'anonymous' is REQUIRED so html2canvas
-// can read tile pixels during PNG export — without it the export produces a
-// blank interior. tile.openstreetmap.org sends Access-Control-Allow-Origin:*
-// (verified 2026), so this works without proxying.
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+// Carto Positron basemap — calm light-grey tiles that let choropleths do the
+// visual work. crossOrigin:'anonymous' is REQUIRED so html2canvas can read
+// tile pixels during PNG export — Carto's CDN sends Access-Control-Allow-
+// Origin:* so this works without proxying. {r} resolves to '@2x' on retina.
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   maxZoom: 19,
+  subdomains: 'abcd',
   crossOrigin: 'anonymous',
-  attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> · © <a href="https://carto.com/attributions">CARTO</a>'
 }).addTo(map);
 
 // Static layers
@@ -2115,6 +2137,58 @@ const boroughL = L.geoJSON(BOROUGH_GJ, {
   }
 });
 // Borough outlines start off — user toggles via 'NW London boroughs' checkbox
+
+// ── Borough name labels (zoom 9-11 only) ─────────────────────────────────
+// Static, semi-transparent labels at each borough's centroid so users can
+// orient at low zoom without cluttering the map at ward zoom. Auto-toggle
+// based on map zoom level. Non-interactive (pointer-events: none) so they
+// never steal hover/click events from the wards underneath.
+const boroughLabels = L.layerGroup();
+(function _buildBoroughLabels() {
+  if (typeof BOROUGH_GJ === 'undefined' || !BOROUGH_GJ.features) return;
+  // Cheap centroid: average of all coordinates. Good enough for label placement.
+  const centroidOf = (g) => {
+    const pts = [];
+    const walk = (x) => {
+      if (typeof x[0] === 'number') { pts.push(x); return; }
+      x.forEach(walk);
+    };
+    walk(g.coordinates);
+    if (!pts.length) return null;
+    const lng = pts.reduce((s,p) => s + p[0], 0) / pts.length;
+    const lat = pts.reduce((s,p) => s + p[1], 0) / pts.length;
+    return [lat, lng];
+  };
+  BOROUGH_GJ.features.forEach(f => {
+    const name = f.properties && f.properties.name;
+    if (!name) return;
+    const c = centroidOf(f.geometry);
+    if (!c) return;
+    const lbl = L.marker(c, {
+      icon: L.divIcon({
+        className: 'borough-label',
+        html: `<span>${name}</span>`,
+        iconSize: [120, 18],
+        iconAnchor: [60, 9],
+      }),
+      interactive: false,
+      keyboard: false,
+    });
+    boroughLabels.addLayer(lbl);
+  });
+})();
+function _refreshBoroughLabels() {
+  const z = map.getZoom();
+  const shouldShow = z >= 9 && z <= 11;
+  if (shouldShow && !boroughLabels._map) {
+    boroughLabels.addTo(map);
+  } else if (!shouldShow && boroughLabels._map) {
+    map.removeLayer(boroughLabels);
+  }
+}
+map.on('zoomend', _refreshBoroughLabels);
+// Run once on load so labels appear at the initial zoom if appropriate.
+setTimeout(_refreshBoroughLabels, 100);
 
 // ── NW London context wards layer ────────────────────────────────────────────
 // Legacy layer kept for backwards compat; the 'NW London wards' toggle now drives
@@ -5621,7 +5695,29 @@ document.getElementById('ov').addEventListener('change', e => {
     const inv = !cfg.wh;
     const stops = [];
     for (let i = 0; i <= 10; i++) stops.push(`${ramp(i / 10, inv)} ${i * 10}%`);
-    document.getElementById('sc-grad').style.background = `linear-gradient(to right, ${stops.join(', ')})`;
+    const gradCss = `linear-gradient(to right, ${stops.join(', ')})`;
+    document.getElementById('sc-grad').style.background = gradCss;
+    // Mirror to the persistent map-legend strip at the bottom of the map.
+    const mls    = document.getElementById('map-legend-strip');
+    const mlsLbl = document.getElementById('mls-label');
+    const mlsMin = document.getElementById('mls-min');
+    const mlsMax = document.getElementById('mls-max');
+    const mlsGrd = document.getElementById('mls-grad');
+    if (mls && mlsLbl && mlsMin && mlsMax && mlsGrd) {
+      const ovOptText = (document.getElementById('ov').selectedOptions[0] || {}).text || curOv;
+      // Strip the trailing " · Ward" / " · LSOA" output-level tag for the strip — it's
+      // duplicated by the meta line in the sidebar and clutters the strip.
+      const cleanLbl = ovOptText.replace(/ · (Ward|LSOA|MSOA|Borough)$/i, '');
+      mlsLbl.textContent = cleanLbl;
+      mlsMin.textContent = range ? (fmtNum(range.lo, 1) + unitSuffix) : '';
+      mlsMax.textContent = range ? (fmtNum(range.hi, 1) + unitSuffix) : '';
+      mlsGrd.style.background = gradCss;
+      mls.style.display = 'flex';
+    }
+  } else {
+    // No overlay → hide the strip
+    const mls = document.getElementById('map-legend-strip');
+    if (mls) mls.style.display = 'none';
   }
   // Auto-enable the LSOA layer if the overlay only has LSOA-level data
   // (IMD domains, claimant count etc.). Without this, users pick e.g.
