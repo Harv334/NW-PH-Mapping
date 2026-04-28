@@ -596,8 +596,8 @@
               <option value="environment_score">Living environment score · LSOA</option>
             </optgroup>
             <optgroup label="Household language (Census 2021, TS025)">
-              <option value="census_english_hh_all_pct">All adults in household have English as main language % · Ward</option>
-              <option value="census_english_hh_none_pct">No people in household have English as main language % · Ward</option>
+              <option value="census_english_hh_all_pct">Households where all adults have English as main language % · Ward</option>
+              <option value="census_english_hh_none_pct">Households where no adults have English as main language % · Ward</option>
             </optgroup>
             <optgroup label="Travel to work (Census 2021, TS061)">
               <option value="census_active_travel_pct">Walk/cycle to work % · Ward</option>
@@ -1116,8 +1116,8 @@ const CATS = [
     { k: "claimant_rate_pct",                l: "Claimant rate, working-age (%)", g: "lsoa" },
   ]},
   { key: "language",     label: "Household language (Census 2021, TS025)", ico: "🗣", fields: [
-    { k: "census_english_hh_all_pct",        l: "All adults English (%)",        g: "ward" },
-    { k: "census_english_hh_none_pct",       l: "No people English (%)",         g: "ward" },
+    { k: "census_english_hh_all_pct",        l: "Households — all adults English first language (%)", g: "ward" },
+    { k: "census_english_hh_none_pct",       l: "Households — no adults English first language (%)",  g: "ward" },
   ]},
   { key: "travel",       label: "Travel to work (Census 2021, TS061)", ico: "🚇", fields: [
     { k: "census_active_travel_pct",         l: "Walk/cycle to work (%)",        g: "ward" },
@@ -1222,8 +1222,8 @@ const OV_META = {
   census_over85_pct:              { src: "Census 2021 (TS007A)", yr: "2021", g: "Ward", u: "%",       desc: "Residents aged 85 and over." },
   census_higher_managerial_pct:   { src: "Census 2021 (TS062)",  yr: "2021", g: "Ward", u: "%",       desc: "NS-SeC higher managerial / professional occupations." },
   census_routine_semi_routine_pct:{ src: "Census 2021 (TS062)",  yr: "2021", g: "Ward", u: "%",       desc: "NS-SeC semi-routine or routine occupations." },
-  census_english_hh_all_pct:      { src: "Census 2021 (TS025)",  yr: "2021", g: "Ward", u: "%",       desc: "Households where all adults have English as a main language." },
-  census_english_hh_none_pct:     { src: "Census 2021 (TS025)",  yr: "2021", g: "Ward", u: "%",       desc: "Households where no adults have English as a main language." },
+  census_english_hh_all_pct:      { src: "Census 2021 (TS025)",  yr: "2021", g: "Ward", u: "%",       desc: "Households where every adult has English (or Welsh) as their main (i.e. first) language. Note: this measures main-language identification, not English-speaking ability — a household can be fluent in English but still fall outside this category." },
+  census_english_hh_none_pct:     { src: "Census 2021 (TS025)",  yr: "2021", g: "Ward", u: "%",       desc: "Households where no adult has English (or Welsh) as their main (i.e. first) language. Adults in these households may still speak English well — this metric only captures main-language identification." },
   census_active_travel_pct:       { src: "Census 2021 (TS061)",  yr: "2021", g: "Ward", u: "%",       desc: "Residents commuting on foot or by bicycle." },
   census_public_transport_pct:    { src: "Census 2021 (TS061)",  yr: "2021", g: "Ward", u: "%",       desc: "Residents commuting by bus, rail, tube or other public transport." },
   census_car_to_work_pct:         { src: "Census 2021 (TS061)",  yr: "2021", g: "Ward", u: "%",       desc: "Residents commuting by car or van." },
@@ -3733,7 +3733,7 @@ window.generateWardReport = function(wn) {
     v: _wardDomainMean(d.k),
     ref: _nwlDomainMean(d.k),
     max: _nwlDomainMax(d.k),
-  })), { size: 240 });
+  })), { size: 340, pad: 70 });
 
   const healthBars = _chartCompare([
     { l:'Good/very good health', v: inds.census_good_health_pct,        ref: _median(_wardVals('census_good_health_pct')),        wh: false, dp: 0 },
@@ -3989,9 +3989,13 @@ window.generateWardReport = function(wn) {
   @media print {
     body { background:#fff; padding:0; font-size:10.5px; }
     .report { box-shadow:none; border-radius:0; width:100%; }
-    .actions { display:none; }
+    .actions, .chart-dl { display:none; }
     .panel, .hero, .kpis, .services, .locblock, .lst { page-break-inside: avoid; }
   }
+  /* Per-chart download button — appears top-right of any panel containing an SVG. */
+  .panel { position: relative; }
+  .chart-dl { position: absolute; top: 8px; right: 10px; background: #fff; border: 1px solid #d0d0d0; border-radius: 4px; padding: 3px 8px; font-size: 10.5px; color: #444; cursor: pointer; opacity: 0.65; transition: opacity .15s, border-color .15s, color .15s; font-family: inherit; }
+  .chart-dl:hover { opacity: 1; border-color: #185FA5; color: #185FA5; }
 </style>
 </head><body>
 <div class="report">
@@ -4025,15 +4029,15 @@ window.generateWardReport = function(wn) {
   <div class="services-wrap">
     <div class="services-title">Services in this ward (counts)</div>
     <div class="services">
-      <div class="svc"><div class="svc-val ${gpN ? '' : 'dim'}">${gpN  || '—'}</div><div class="svc-lbl">GP</div></div>
-      <div class="svc"><div class="svc-val ${pharmN ? '' : 'dim'}">${pharmN || '—'}</div><div class="svc-lbl">Pharmacy</div></div>
-      <div class="svc"><div class="svc-val ${dentN ? '' : 'dim'}">${dentN  || '—'}</div><div class="svc-lbl">Dental</div></div>
-      <div class="svc"><div class="svc-val ${hospN ? '' : 'dim'}">${hospN  || '—'}</div><div class="svc-lbl">Hospital</div></div>
-      <div class="svc"><div class="svc-val ${schN ? '' : 'dim'}">${schN   || '—'}</div><div class="svc-lbl">Schools</div></div>
-      <div class="svc"><div class="svc-val ${ccN ? '' : 'dim'}">${ccN    || '—'}</div><div class="svc-lbl">Comm ctr</div></div>
-      <div class="svc"><div class="svc-val ${libN ? '' : 'dim'}">${libN   || '—'}</div><div class="svc-lbl">Library</div></div>
-      <div class="svc"><div class="svc-val ${esolN ? '' : 'dim'}">${esolN  || '—'}</div><div class="svc-lbl">ESOL</div></div>
-      <div class="svc"><div class="svc-val ${vcseN ? '' : 'dim'}">${vcseN  || '—'}</div><div class="svc-lbl">VCSE</div></div>
+      <div class="svc"><div class="svc-val ${gpN ? '' : 'dim'}">${gpN  ?? 0}</div><div class="svc-lbl">GP</div></div>
+      <div class="svc"><div class="svc-val ${pharmN ? '' : 'dim'}">${pharmN ?? 0}</div><div class="svc-lbl">Pharmacy</div></div>
+      <div class="svc"><div class="svc-val ${dentN ? '' : 'dim'}">${dentN  ?? 0}</div><div class="svc-lbl">Dental</div></div>
+      <div class="svc"><div class="svc-val ${hospN ? '' : 'dim'}">${hospN  ?? 0}</div><div class="svc-lbl">Hospital</div></div>
+      <div class="svc"><div class="svc-val ${schN ? '' : 'dim'}">${schN   ?? 0}</div><div class="svc-lbl">Schools</div></div>
+      <div class="svc"><div class="svc-val ${ccN ? '' : 'dim'}">${ccN    ?? 0}</div><div class="svc-lbl">Comm ctr</div></div>
+      <div class="svc"><div class="svc-val ${libN ? '' : 'dim'}">${libN   ?? 0}</div><div class="svc-lbl">Library</div></div>
+      <div class="svc"><div class="svc-val ${esolN ? '' : 'dim'}">${esolN  ?? 0}</div><div class="svc-lbl">ESOL</div></div>
+      <div class="svc"><div class="svc-val ${vcseN ? '' : 'dim'}">${vcseN  ?? 0}</div><div class="svc-lbl">VCSE</div></div>
     </div>
   </div>
 
@@ -4118,6 +4122,46 @@ window.generateWardReport = function(wn) {
   <button onclick="window.print()">Print / Save as PDF</button>
   <button onclick="window.close()">Close</button>
 </div>
+<script>
+  // Auto-wire per-chart "↓ SVG" download button on every .panel that contains
+  // an <svg>. Click → serialize and download the chart as standalone SVG.
+  (function _wireChartDownloads() {
+    const baseTitle = (document.querySelector('.report h1')?.textContent || 'profile').trim();
+    document.querySelectorAll('.panel').forEach(panel => {
+      const svg = panel.querySelector('svg');
+      if (!svg) return;
+      const h3  = panel.querySelector('h3');
+      const lbl = (h3 ? h3.textContent : 'chart').trim();
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chart-dl';
+      btn.textContent = '↓ SVG';
+      btn.title = 'Download this chart as SVG';
+      btn.addEventListener('click', () => {
+        const clone = svg.cloneNode(true);
+        if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        if (!clone.getAttribute('xmlns:xlink')) clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+        const xml = '<?xml version="1.0" standalone="no"?>\n' +
+                    new XMLSerializer().serializeToString(clone);
+        const safe = (baseTitle + ' — ' + lbl)
+          .replace(/[^A-Za-z0-9 ()&,_-]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 80) || 'chart';
+        const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+        const url  = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = safe + '.svg';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 500);
+      });
+      panel.appendChild(btn);
+    });
+  })();
+</script>
 </body></html>`;
 
   const w = window.open('', '_blank');
@@ -5245,7 +5289,11 @@ window.generateLSOAReport = function(code) {
   .actions { max-width:880px; margin: 10px auto 0; display:flex; gap:8px; justify-content:flex-end; }
   .actions button { padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:5px; font-size:12px; cursor:pointer; color:#333; }
   .actions button:hover { border-color:#999; }
-  @media print { body { background:#fff; padding:0; font-size:10.5px; } .report { box-shadow:none; border-radius:0; width:100%; } .actions { display:none; } .panel, .hero, .kpis, .services, .locblock { page-break-inside: avoid; } }
+  @media print { body { background:#fff; padding:0; font-size:10.5px; } .report { box-shadow:none; border-radius:0; width:100%; } .actions, .chart-dl { display:none; } .panel, .hero, .kpis, .services, .locblock { page-break-inside: avoid; } }
+  /* Per-chart download button — appears top-right of any panel containing an SVG. */
+  .panel { position: relative; }
+  .chart-dl { position: absolute; top: 8px; right: 10px; background: #fff; border: 1px solid #d0d0d0; border-radius: 4px; padding: 3px 8px; font-size: 10.5px; color: #444; cursor: pointer; opacity: 0.65; transition: opacity .15s, border-color .15s, color .15s; font-family: inherit; }
+  .chart-dl:hover { opacity: 1; border-color: #185FA5; color: #185FA5; }
 </style>
 </head><body>
 <div class="report">
@@ -5275,15 +5323,15 @@ window.generateLSOAReport = function(code) {
   <div class="services-wrap">
     <div class="services-title">Services in this LSOA (counts inside polygon)</div>
     <div class="services">
-      <div class="svc"><div class="svc-val ${gpN ? '' : 'dim'}">${gpN  || '—'}</div><div class="svc-lbl">GP</div></div>
-      <div class="svc"><div class="svc-val ${pharmN ? '' : 'dim'}">${pharmN || '—'}</div><div class="svc-lbl">Pharmacy</div></div>
-      <div class="svc"><div class="svc-val ${dentN ? '' : 'dim'}">${dentN  || '—'}</div><div class="svc-lbl">Dental</div></div>
-      <div class="svc"><div class="svc-val ${hospN ? '' : 'dim'}">${hospN  || '—'}</div><div class="svc-lbl">Hospital</div></div>
-      <div class="svc"><div class="svc-val ${schN ? '' : 'dim'}">${schN   || '—'}</div><div class="svc-lbl">Schools</div></div>
-      <div class="svc"><div class="svc-val ${ccN ? '' : 'dim'}">${ccN    || '—'}</div><div class="svc-lbl">Comm ctr</div></div>
-      <div class="svc"><div class="svc-val ${libN ? '' : 'dim'}">${libN   || '—'}</div><div class="svc-lbl">Library</div></div>
-      <div class="svc"><div class="svc-val ${esolN ? '' : 'dim'}">${esolN  || '—'}</div><div class="svc-lbl">ESOL</div></div>
-      <div class="svc"><div class="svc-val ${vcseN ? '' : 'dim'}">${vcseN  || '—'}</div><div class="svc-lbl">VCSE</div></div>
+      <div class="svc"><div class="svc-val ${gpN ? '' : 'dim'}">${gpN  ?? 0}</div><div class="svc-lbl">GP</div></div>
+      <div class="svc"><div class="svc-val ${pharmN ? '' : 'dim'}">${pharmN ?? 0}</div><div class="svc-lbl">Pharmacy</div></div>
+      <div class="svc"><div class="svc-val ${dentN ? '' : 'dim'}">${dentN  ?? 0}</div><div class="svc-lbl">Dental</div></div>
+      <div class="svc"><div class="svc-val ${hospN ? '' : 'dim'}">${hospN  ?? 0}</div><div class="svc-lbl">Hospital</div></div>
+      <div class="svc"><div class="svc-val ${schN ? '' : 'dim'}">${schN   ?? 0}</div><div class="svc-lbl">Schools</div></div>
+      <div class="svc"><div class="svc-val ${ccN ? '' : 'dim'}">${ccN    ?? 0}</div><div class="svc-lbl">Comm ctr</div></div>
+      <div class="svc"><div class="svc-val ${libN ? '' : 'dim'}">${libN   ?? 0}</div><div class="svc-lbl">Library</div></div>
+      <div class="svc"><div class="svc-val ${esolN ? '' : 'dim'}">${esolN  ?? 0}</div><div class="svc-lbl">ESOL</div></div>
+      <div class="svc"><div class="svc-val ${vcseN ? '' : 'dim'}">${vcseN  ?? 0}</div><div class="svc-lbl">VCSE</div></div>
     </div>
   </div>
 
@@ -5358,6 +5406,46 @@ window.generateLSOAReport = function(code) {
   <button onclick="window.print()">Print / Save as PDF</button>
   <button onclick="window.close()">Close</button>
 </div>
+<script>
+  // Auto-wire per-chart "↓ SVG" download button on every .panel that contains
+  // an <svg>. Click → serialize and download the chart as standalone SVG.
+  (function _wireChartDownloads() {
+    const baseTitle = (document.querySelector('.report h1')?.textContent || 'profile').trim();
+    document.querySelectorAll('.panel').forEach(panel => {
+      const svg = panel.querySelector('svg');
+      if (!svg) return;
+      const h3  = panel.querySelector('h3');
+      const lbl = (h3 ? h3.textContent : 'chart').trim();
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chart-dl';
+      btn.textContent = '↓ SVG';
+      btn.title = 'Download this chart as SVG';
+      btn.addEventListener('click', () => {
+        const clone = svg.cloneNode(true);
+        if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        if (!clone.getAttribute('xmlns:xlink')) clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+        const xml = '<?xml version="1.0" standalone="no"?>\n' +
+                    new XMLSerializer().serializeToString(clone);
+        const safe = (baseTitle + ' — ' + lbl)
+          .replace(/[^A-Za-z0-9 ()&,_-]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 80) || 'chart';
+        const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+        const url  = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = safe + '.svg';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 500);
+      });
+      panel.appendChild(btn);
+    });
+  })();
+</script>
 </body></html>`;
 
   const w = window.open('', '_blank');
