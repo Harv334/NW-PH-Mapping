@@ -995,9 +995,9 @@ const OV_CFG = {
                                    { lo:"Lower", hi:"Higher", wh:true,  min:100,  max:1800 },
   cst_passive_green_space:         { lo:"Lower", hi:"Higher", wh:false, min:0,    max:0.6  },
   cst_number_and_proximity_of_community_centres:
-                                   { lo:"Lower", hi:"Higher", wh:false, min:0,    max:1700 },
+                                   { lo:"Lower", hi:"Higher", wh:true,  min:0,    max:1700 },
   cst_number_and_proximity_of_cultural_spaces:
-                                   { lo:"Lower", hi:"Higher", wh:false, min:0,    max:700  },
+                                   { lo:"Lower", hi:"Higher", wh:true,  min:0,    max:700  },
   cst_number_of_faith_centres:     { lo:"Fewer", hi:"More",   wh:false, min:0,    max:15   },
   ft_93280                      : { lo:"Lower", hi:"Higher", wh:true, min:5.5132, max:14.2429 },
   ft_93097                      : { lo:"Lower", hi:"Higher", wh:true, min:0.7017, max:13.1514 },
@@ -1278,9 +1278,9 @@ const OV_META = {
                                    { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "score",       desc: "Composite score reflecting library count and proximity. Lower = better (closer/more libraries)." },
   cst_passive_green_space:         { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "proportion",  desc: "Proportion of ward area covered by passive green space (parks, commons, quiet gardens)." },
   cst_number_and_proximity_of_community_centres:
-                                   { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "score",       desc: "Composite score reflecting the number of community centres and their proximity to residents. Higher = better access." },
+                                   { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "score",       desc: "Composite score reflecting community-centre count and proximity. Lower = better (closer/more community centres)." },
   cst_number_and_proximity_of_cultural_spaces:
-                                   { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "score",       desc: "Composite score reflecting the number of cultural spaces (museums, galleries, theatres) and their proximity to residents." },
+                                   { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "score",       desc: "Composite score reflecting cultural-space count and proximity. Lower = better (closer/more cultural spaces)." },
   cst_number_of_faith_centres:     { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "count",       desc: "Number of faith centres (churches, mosques, synagogues, temples and other places of worship) in the ward." },
   ft_93280                      : { src: "OHID Fingertips (Local Health, MSOA → ward via LSOA bridge)", yr: "latest", g: "Ward (MSOA-derived)", u: "%", desc: "Fuel poverty (low income, low energy efficiency methodology). Polarity: RAG - Low is good" },
   ft_93097                      : { src: "OHID Fingertips (Local Health, MSOA → ward via LSOA bridge)", yr: "latest", g: "Ward (MSOA-derived)", u: "%", desc: "Unemployment: people claiming out of work benefit (aged 16 to 64). Polarity: RAG - Low is good" },
@@ -2303,6 +2303,13 @@ if (_tcic) _tcic.addEventListener('change', e => _setCicLayerVisible(e.target.ch
 function applyCICFilter() {
   const areaFilter = (typeof currentVCSEAreaFilter !== 'undefined') ? currentVCSEAreaFilter : 'all';
   const textFilter = (document.getElementById('vcse-search')?.value || '').toLowerCase().trim();
+  // Borough-focus override (mirrors applyVCSEFilter): when a borough is
+  // focused, hide CICs outside that borough regardless of area-filter.
+  const _focusedLadCode = (typeof focusedBorough !== 'undefined' && focusedBorough && focusedBorough !== 'all')
+    ? (LAD_NAME_TO_CODE[focusedBorough]
+       || LAD_NAME_TO_CODE[focusedBorough === 'City of Westminster' ? 'Westminster' : focusedBorough]
+       || '')
+    : '';
   cicData.forEach(o => {
     let areaMatch;
     if (areaFilter === 'london' || areaFilter === 'all') {
@@ -2314,11 +2321,12 @@ function applyCICFilter() {
     } else {
       areaMatch = nbhdOfLatLng(o.lat, o.lng) === areaFilter.replace('nbhd-', '');
     }
+    const focusMatch = !_focusedLadCode || (o.record.lad || '') === _focusedLadCode;
     const textMatch = !textFilter ||
       o.name.toLowerCase().includes(textFilter) ||
       (o.addr||'').toLowerCase().includes(textFilter);
     const causeMatch = _causeMatches(o.record);
-    const visible = areaMatch && textMatch && causeMatch;
+    const visible = areaMatch && focusMatch && textMatch && causeMatch;
     if (visible) {
       if (!cicCluster.hasLayer(o.marker)) cicCluster.addLayer(o.marker);
     } else {
@@ -2831,6 +2839,14 @@ function _causeMatches(rec) {
 function applyVCSEFilter() {
   const areaFilter = currentVCSEAreaFilter;
   const textFilter = (document.getElementById('vcse-search')?.value || '').toLowerCase().trim();
+  // Borough-focus override: when a borough is focused via the Layers tab,
+  // we must filter VCSE pins to that borough no matter what the area-filter
+  // dropdown says. Compute the LAD code for the focused borough up front.
+  const _focusedLadCode = (typeof focusedBorough !== 'undefined' && focusedBorough && focusedBorough !== 'all')
+    ? (LAD_NAME_TO_CODE[focusedBorough]
+       || LAD_NAME_TO_CODE[focusedBorough === 'City of Westminster' ? 'Westminster' : focusedBorough]
+       || '')
+    : '';
 
   // Determine visibility for each org
   vcseData.forEach(o => {
@@ -2853,6 +2869,10 @@ function applyVCSEFilter() {
       const nbhdKey = areaFilter.replace('nbhd-', '');
       areaMatch = nbhdOfLatLng(o.lat, o.lng) === nbhdKey;
     }
+    // Hard borough-focus gate. If a borough is focused, any pin whose LAD
+    // doesn't match is hidden regardless of area-filter setting.
+    const focusMatch = !_focusedLadCode || (o.record.lad || '') === _focusedLadCode;
+
     const textMatch = !textFilter ||
       o.name.toLowerCase().includes(textFilter) ||
       (o.addr||'').toLowerCase().includes(textFilter);
@@ -2860,7 +2880,7 @@ function applyVCSEFilter() {
     const tagMatch = _vcseOrgMatchesTags(o.record);
     const causeMatch = _causeMatches(o.record);
 
-    const visible = areaMatch && textMatch && tagMatch && causeMatch;
+    const visible = areaMatch && focusMatch && textMatch && tagMatch && causeMatch;
     if (visible) {
       if (!vcseCluster.hasLayer(o.marker)) vcseCluster.addLayer(o.marker);
     } else {
@@ -2882,7 +2902,8 @@ function applyVCSEFilter() {
     } else {
       areaMatch = nbhdOfLatLng(o.lat, o.lng) === areaFilter.replace('nbhd-', '');
     }
-    return areaMatch && _vcseOrgMatchesTags(o.record) && (!textFilter || o.name.toLowerCase().includes(textFilter) || (o.addr||'').toLowerCase().includes(textFilter));
+    const focusMatch = !_focusedLadCode || (o.record.lad || '') === _focusedLadCode;
+    return areaMatch && focusMatch && _vcseOrgMatchesTags(o.record) && _causeMatches(o.record) && (!textFilter || o.name.toLowerCase().includes(textFilter) || (o.addr||'').toLowerCase().includes(textFilter));
   });
 
   const countEl = document.getElementById('vcse-count');
@@ -4308,6 +4329,9 @@ function _applyBoroughSolo() {
     }
     if (typeof applyVCSEFilter === 'function') applyVCSEFilter();
   }
+  // CIC cluster — applyCICFilter now respects focusedBorough internally,
+  // so a refresh is enough to honour the new focus state.
+  if (typeof applyCICFilter === 'function') applyCICFilter();
 
   // 7. Greenspace polygons — centroid-in-borough test, cached on each layer.
   if (typeof grL !== 'undefined' && grL) {
