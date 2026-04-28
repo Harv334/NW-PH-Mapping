@@ -411,7 +411,7 @@
             </select>
           </div>
           <label class="lrow"><div style="width:9px;height:9px;border:1.5px solid #000;border-radius:2px;flex-shrink:0"></div><span class="lname">Ward boundaries <span class="lcount" id="ward-count">188</span></span><input type="checkbox" id="tnw" checked></label>
-          <label class="lrow"><div style="width:9px;height:9px;border:1.5px dashed #e67e22;border-radius:2px;flex-shrink:0"></div><span class="lname">LSOA<span class="lhelp" title="Lower-layer Super Output Area — small census geography of ~1,500 residents or ~650 households. There are ~1,200 across NW London.">?</span> boundaries <span class="lcount" id="lsoa-count">0</span></span><input type="checkbox" id="tlsoa"></label>
+          <label class="lrow"><div style="width:9px;height:9px;border:1.5px solid #1E4B8E;border-radius:2px;flex-shrink:0"></div><span class="lname">LSOA boundaries <span class="lcount" id="lsoa-count">0</span></span><input type="checkbox" id="tlsoa"></label>
           <label id="lsoa-imd-row" class="lrow" style="display:none;margin-left:18px;padding:3px 0 0"><div style="width:9px;height:9px;background:linear-gradient(90deg,#67000d,#cb181d,#fb6a4a,#a1d99b,#006d2c);border-radius:2px;flex-shrink:0"></div><span class="lname" style="font-size:11px">Colour by IMD decile</span><input type="checkbox" id="tlsoa-imd"></label>
           <div id="lsoa-filter-row" style="display:none;margin:4px 0 0 18px">
             <select id="lsoa-scope" style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:5px;font-size:11px;color:#333;background:#fff">
@@ -992,7 +992,7 @@ const OV_CFG = {
   cst_gentrification_change_in_occupational_classes:
                                    { lo:"Less change", hi:"More change", wh:false, min:-3, max:10 },
   cst_number_and_proximity_of_libraries:
-                                   { lo:"Lower", hi:"Higher", wh:false, min:100,  max:1800 },
+                                   { lo:"Lower", hi:"Higher", wh:true,  min:100,  max:1800 },
   cst_passive_green_space:         { lo:"Lower", hi:"Higher", wh:false, min:0,    max:0.6  },
   cst_number_and_proximity_of_community_centres:
                                    { lo:"Lower", hi:"Higher", wh:false, min:0,    max:1700 },
@@ -1275,7 +1275,7 @@ const OV_META = {
   cst_gentrification_change_in_occupational_classes:
                                    { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "index",       desc: "Change in occupational-class composition — a gentrification signal. Positive = shift toward higher occupational classes." },
   cst_number_and_proximity_of_libraries:
-                                   { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "score",       desc: "Composite score reflecting the number of libraries and how close they are to residents in the ward. Higher = better access." },
+                                   { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "score",       desc: "Composite score reflecting library count and proximity. Lower = better (closer/more libraries)." },
   cst_passive_green_space:         { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "proportion",  desc: "Proportion of ward area covered by passive green space (parks, commons, quiet gardens)." },
   cst_number_and_proximity_of_community_centres:
                                    { src: "London Civic Strength Index (Round 3), London Datastore", yr: "2024", g: "Ward", u: "score",       desc: "Composite score reflecting the number of community centres and their proximity to residents. Higher = better access." },
@@ -4262,17 +4262,32 @@ function _applyBoroughSolo() {
   _toggleLayerGroup(gpL, 'gp');
   _toggleLayerGroup(hL, 'hosp');
 
-  // 5. Pharmacy cluster — must remove/add so cluster counts re-compute.
-  if (pharmCluster && Array.isArray(pharmData)) {
-    pharmData.forEach(p => {
-      const inFocus = !focused || p._lad === focusedBorough;
+  // 5. Marker-cluster point layers — pharmacy, dental, CIC, schools,
+  // community centres, libraries, ESOL providers. They all share the same
+  // shape (cluster + a data array of {marker, lat, lng}) so a single helper
+  // filters them. _lad is computed lazily via the geocoder.
+  const _filterClusterByBorough = (cluster, dataArr) => {
+    if (!cluster || !Array.isArray(dataArr)) return;
+    dataArr.forEach(rec => {
+      if (rec._lad == null && typeof ladOfLatLng === 'function') {
+        try { rec._lad = ladOfLatLng(rec.lat, rec.lng) || ''; }
+        catch (e) { rec._lad = ''; }
+      }
+      const inFocus = !focused || rec._lad === focusedBorough;
       if (inFocus) {
-        if (!pharmCluster.hasLayer(p.marker)) pharmCluster.addLayer(p.marker);
+        if (!cluster.hasLayer(rec.marker)) cluster.addLayer(rec.marker);
       } else {
-        if (pharmCluster.hasLayer(p.marker)) pharmCluster.removeLayer(p.marker);
+        if (cluster.hasLayer(rec.marker)) cluster.removeLayer(rec.marker);
       }
     });
-  }
+  };
+  _filterClusterByBorough(pharmCluster,  typeof pharmData   !== 'undefined' ? pharmData   : []);
+  _filterClusterByBorough(dentalCluster, typeof dentalData  !== 'undefined' ? dentalData  : []);
+  _filterClusterByBorough(cicCluster,    typeof cicData     !== 'undefined' ? cicData     : []);
+  _filterClusterByBorough(schoolsCluster,typeof schoolsData !== 'undefined' ? schoolsData : []);
+  _filterClusterByBorough(ccCluster,     typeof ccData      !== 'undefined' ? ccData      : []);
+  _filterClusterByBorough(libCluster,    typeof libData     !== 'undefined' ? libData     : []);
+  _filterClusterByBorough(esolCluster,   typeof esolData    !== 'undefined' ? esolData    : []);
 
   // 6. VCSE layer — re-use applyVCSEFilter() which already supports 'lad-<code>'.
   //    Also sync the VCSE-tab dropdown so the UI reflects the current focus.
