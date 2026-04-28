@@ -3492,7 +3492,7 @@ window.generateWardReport = function(wn) {
       const lx = cx + Math.cos(ang) * (R + 14);
       const ly = cy + Math.sin(ang) * (R + 14) + 3;
       const anchor = Math.cos(ang) > 0.2 ? 'start' : (Math.cos(ang) < -0.2 ? 'end' : 'middle');
-      svg += `<text x="${lx}" y="${ly}" text-anchor="${anchor}" font-size="9.5" fill="#333">${_esc(a.l)}</text>`;
+      svg += `<text x="${lx}" y="${ly}" text-anchor="${anchor}" font-size="${Math.round(size * 0.052)}" font-weight="500" fill="#222">${_esc(a.l)}</text>`;
     });
     svg += `</svg>`;
     return svg;
@@ -3672,7 +3672,7 @@ window.generateWardReport = function(wn) {
     { l:'Level 4+ qual',     v: inds.census_level4_qual_pct,        ref: _median(_wardVals('census_level4_qual_pct')),        wh: false, dp: 0 },
     { l:'Higher managerial', v: inds.census_higher_managerial_pct,  ref: _median(_wardVals('census_higher_managerial_pct')),  wh: false, dp: 0 },
     { l:'Routine/semi',      v: inds.census_routine_semi_routine_pct, ref: _median(_wardVals('census_routine_semi_routine_pct')), wh: true,  dp: 0 },
-    { l:'No people English (HH)', v: inds.census_english_hh_none_pct, ref: _median(_wardVals('census_english_hh_none_pct')), wh: true,  dp: 0 },
+    { l:'No adult English first lang (HH)', v: inds.census_english_hh_none_pct, ref: _median(_wardVals('census_english_hh_none_pct')), wh: true, dp: 0 },
   ], { width: 380 });
 
   // ── Health & deprivation: IMD-domain radar + ward-level health bars ──
@@ -4942,7 +4942,7 @@ window.generateLSOAReport = function(code) {
       const lx = cx + Math.cos(ang) * (R + 14);
       const ly = cy + Math.sin(ang) * (R + 14) + 3;
       const anchor = Math.cos(ang) > 0.2 ? 'start' : (Math.cos(ang) < -0.2 ? 'end' : 'middle');
-      svg += `<text x="${lx}" y="${ly}" text-anchor="${anchor}" font-size="9.5" fill="#333">${_esc(a.l)}</text>`;
+      svg += `<text x="${lx}" y="${ly}" text-anchor="${anchor}" font-size="${Math.round(size * 0.052)}" font-weight="500" fill="#222">${_esc(a.l)}</text>`;
     });
     svg += `</svg>`;
     return svg;
