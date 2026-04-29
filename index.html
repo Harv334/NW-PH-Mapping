@@ -5860,12 +5860,24 @@ document.getElementById('ov').addEventListener('change', e => {
   // "Income deprivation" and see an empty grey ward layer — because wards
   // don't carry those indicators. We leave ward colouring active for
   // dual-level indicators (census_unemployed_pct, crime_total etc.).
-  if (isLsoaOnlyOv(curOv) && !lsoaActive) {
-    const lsoaToggle = document.getElementById('tlsoa');
-    if (lsoaToggle && !lsoaToggle.checked) {
-      lsoaToggle.checked = true;
-      lsoaToggle.__skipLevelGate = true;  // bypass mismatch block — this is auto-correct, not user request
-      lsoaToggle.dispatchEvent(new Event('change'));
+  // Auto-sync the LSOA layer to the new overlay's level. If the user picks
+  // an LSOA-only indicator we turn the LSOA layer ON; if they pick a ward-
+  // only indicator we turn it OFF (so LSOA boundaries don't sit on top of
+  // and obscure the ward shading). Both flips bypass the mismatch gate
+  // because they're system-driven corrections, not user-attempted changes.
+  if (curOv && curOv !== 'none' && typeof ovLevel === 'function') {
+    const _lvl = ovLevel(curOv);
+    const _t = document.getElementById('tlsoa');
+    if (_t) {
+      if (_lvl === 'lsoa' && !_t.checked) {
+        _t.checked = true;
+        _t.__skipLevelGate = true;
+        _t.dispatchEvent(new Event('change'));
+      } else if (_lvl === 'ward' && _t.checked) {
+        _t.checked = false;
+        _t.__skipLevelGate = true;
+        _t.dispatchEvent(new Event('change'));
+      }
     }
   }
   if (wLyr) wLyr.eachLayer(l => l.setStyle(wstyle(l.feature.properties.WD24NM, curOv, gs(l.feature.properties.WD24NM))));
