@@ -5899,6 +5899,29 @@ function _setDataLevel(level, opts) {
     return;
   }
   if (level !== 'ward' && level !== 'lsoa') return;
+
+  // ── Compatibility gate ───────────────────────────────────────────────
+  // When the user clicks a Ward/LSOA badge button (i.e. not via the
+  // automatic sync paths), block the change if the current overlay isn't
+  // available at that level. Show a toast and bail before mutating any
+  // state. Auto-sync paths (fromOverlay / fromLsoaToggle) skip the gate
+  // because they reflect a level switch the system has already validated.
+  if (!opts.fromOverlay && !opts.fromLsoaToggle && level !== currentDataLevel
+      && typeof curOv !== 'undefined' && curOv && curOv !== 'none'
+      && typeof ovLevel === 'function') {
+    const lvl = ovLevel(curOv);
+    const ovTxt = ((document.getElementById('ov').selectedOptions[0] || {}).text || curOv)
+                    .replace(/ · (Ward|LSOA|MSOA|Borough)$/i, '');
+    if (lvl === 'ward' && level === 'lsoa') {
+      _levelToast(`<b>Ward-only indicator</b><br>"${ovTxt}"<br>is published at ward level only — switching to LSOA mode would hide its shading.`);
+      return;
+    }
+    if (lvl === 'lsoa' && level === 'ward') {
+      _levelToast(`<b>LSOA-only indicator</b><br>"${ovTxt}"<br>has no ward-level value — clear the overlay first if you want to leave LSOA mode.`);
+      return;
+    }
+  }
+
   currentDataLevel = level;
   document.querySelectorAll('#dl-seg button').forEach(b => {
     if (!b.classList.contains('disabled')) {
@@ -5911,15 +5934,12 @@ function _setDataLevel(level, opts) {
     const wantLsoa = (level === 'lsoa');
     if (lsoaToggle.checked !== wantLsoa) {
       lsoaToggle.checked = wantLsoa;
+      lsoaToggle.__skipLevelGate = true;  // gate already passed at the dl-badge level
       lsoaToggle.dispatchEvent(new Event('change'));
     }
   }
-  // If switching to Ward while an LSOA-only overlay is active, reset overlay.
-  if (level === 'ward' && typeof curOv !== 'undefined' && curOv && curOv !== 'none'
-      && typeof isLsoaOnlyOv === 'function' && isLsoaOnlyOv(curOv)) {
-    const ovSel = document.getElementById('ov');
-    if (ovSel) { ovSel.value = 'none'; ovSel.dispatchEvent(new Event('change')); }
-  }
+  // (No overlay-reset here. The gate above means we never reach this
+  // function with an LSOA-only overlay active and level === 'ward'.)
 }
 document.querySelectorAll('#dl-seg button').forEach(b => {
   b.addEventListener('click', () => _setDataLevel(b.dataset.dl));
