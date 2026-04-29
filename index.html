@@ -516,13 +516,6 @@
             <span id="ov-info" class="lhelp" title="About the current indicator" style="display:none">i</span>
           </div>
           <div id="ov-info-panel" style="display:none;background:#fafafa;border:1px solid #eee;border-radius:5px;padding:7px 9px;margin:0 0 8px;font-size:11px;color:#555;line-height:1.5"></div>
-          <!-- Level-mismatch warning. Shown when the current overlay's geography
-               (Ward or LSOA) doesn't match the active data layer the user has
-               toggled on, so colours on screen are misleading or missing. -->
-          <div id="overlay-level-warn" style="display:none;background:#fff8e6;border:1px solid #e0c280;color:#5c4115;padding:7px 9px;margin:0 0 8px;font-size:11.5px;line-height:1.45;border-radius:5px">
-            <span id="olw-msg"></span>
-            <button type="button" id="olw-fix" style="margin-top:5px;background:#5c4115;color:#fff;border:none;border-radius:4px;padding:3px 9px;font-size:11px;cursor:pointer">Switch</button>
-          </div>
           <select id="ov">
             <option value="none">— none (neighbourhood colours) —</option>
             <optgroup label="Health (Census 2021)">
@@ -1213,39 +1206,23 @@ function ovLevel(k) {
   return '';
 }
 
-// Refresh the level-mismatch warning. Called from the dropdown change
-// handlers and from the LSOA-toggle / data-level handlers. Shows a warning
-// when the active overlay's level doesn't match the user's active layer
-// state, with a one-click "Switch" button to flip the layer.
-function _refreshOverlayLevelWarning() {
-  const box = document.getElementById('overlay-level-warn');
-  const msg = document.getElementById('olw-msg');
-  const btn = document.getElementById('olw-fix');
-  if (!box || !msg || !btn) return;
-  const k = (typeof curOv !== 'undefined') ? curOv : 'none';
-  if (!k || k === 'none') { box.style.display = 'none'; return; }
-  const lvl = ovLevel(k);                              // 'ward' / 'lsoa' / ''
-  const lsoaOn = !!document.getElementById('tlsoa')?.checked;
-  let needsLsoa = false, needsWard = false;
-  if (lvl === 'lsoa' && !lsoaOn) needsLsoa = true;     // overlay is LSOA-only, layer is off
-  if (lvl === 'ward' && lsoaOn)  needsWard = true;     // overlay is ward-only, but user is in LSOA mode
-  if (!needsLsoa && !needsWard) { box.style.display = 'none'; return; }
-  if (needsLsoa) {
-    msg.innerHTML = '<b>This indicator is at LSOA level.</b> Switch to LSOA mode to see it.';
-    btn.textContent = 'Switch to LSOA mode';
-    btn.onclick = () => {
-      const t = document.getElementById('tlsoa');
-      if (t && !t.checked) { t.checked = true; t.dispatchEvent(new Event('change')); }
-    };
-  } else {
-    msg.innerHTML = '<b>This indicator is at Ward level.</b> Currently the LSOA layer is on top of the wards, hiding the ward shading.';
-    btn.textContent = 'Switch to Ward mode';
-    btn.onclick = () => {
-      const t = document.getElementById('tlsoa');
-      if (t && t.checked) { t.checked = false; t.dispatchEvent(new Event('change')); }
-    };
+// Brief floating toast for level-mismatch blocking. Shows for ~4s then
+// auto-dismisses. Stacked z-index to sit above the map and any banners.
+function _levelToast(msg) {
+  let el = document.getElementById('_level-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = '_level-toast';
+    el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#1a1a1a;color:#fff;padding:14px 22px;border-radius:8px;font-size:13px;line-height:1.5;max-width:420px;text-align:center;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.30);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;pointer-events:none;opacity:0;transition:opacity .2s';
+    document.body.appendChild(el);
   }
-  box.style.display = 'block';
+  el.innerHTML = msg;
+  // Reflow so the transition fires
+  // eslint-disable-next-line no-unused-expressions
+  void el.offsetWidth;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 4000);
 }
 
 // Metadata shown in the scale-bar footer and the overlay-info popover.
@@ -5607,6 +5584,30 @@ document.getElementById('lsoa-scope').addEventListener('change', e => {
 });
 
 document.getElementById('tlsoa').addEventListener('change', e => {
+  // Block the toggle if the current overlay isn't available at the level
+  // the user is trying to switch to. Revert the checkbox + show a toast.
+  // The auto-enable inside the #ov change handler bypasses this gate via
+  // the `__skipLevelGate` flag so we don't fight ourselves.
+  if (!e.target.__skipLevelGate) {
+    const k = (typeof curOv !== 'undefined') ? curOv : 'none';
+    if (k && k !== 'none') {
+      const lvl = ovLevel(k);
+      const wantsLsoa = e.target.checked;
+      if (lvl === 'ward' && wantsLsoa) {
+        e.target.checked = false;
+        const lbl = (document.getElementById('ov').selectedOptions[0] || {}).text || k;
+        _levelToast(`<b>Ward-only indicator</b><br>"${lbl.replace(/ · (Ward|LSOA|MSOA|Borough)$/i,'')}"<br>is published at ward level only — switching to LSOA mode would hide its shading.`);
+        return;
+      }
+      if (lvl === 'lsoa' && !wantsLsoa) {
+        e.target.checked = true;
+        const lbl = (document.getElementById('ov').selectedOptions[0] || {}).text || k;
+        _levelToast(`<b>LSOA-only indicator</b><br>"${lbl.replace(/ · (Ward|LSOA|MSOA|Borough)$/i,'')}"<br>has no ward-level value — turn off the overlay first if you want to leave LSOA mode.`);
+        return;
+      }
+    }
+  }
+  delete e.target.__skipLevelGate;
   lsoaActive = e.target.checked;
   document.getElementById('lsoa-filter-row').style.display = lsoaActive ? 'block' : 'none';
   document.getElementById('lsoa-imd-row').style.display = lsoaActive ? 'flex' : 'none';
@@ -5620,8 +5621,6 @@ document.getElementById('tlsoa').addEventListener('change', e => {
     map.removeLayer(lsoaLyr);
     selLSOA = null;
   }
-  // Re-evaluate level-mismatch warning whenever LSOA layer toggles.
-  if (typeof _refreshOverlayLevelWarning === 'function') _refreshOverlayLevelWarning();
 });
 
 document.getElementById('tlsoa-imd').addEventListener('change', e => {
@@ -5865,6 +5864,7 @@ document.getElementById('ov').addEventListener('change', e => {
     const lsoaToggle = document.getElementById('tlsoa');
     if (lsoaToggle && !lsoaToggle.checked) {
       lsoaToggle.checked = true;
+      lsoaToggle.__skipLevelGate = true;  // bypass mismatch block — this is auto-correct, not user request
       lsoaToggle.dispatchEvent(new Event('change'));
     }
   }
@@ -5872,8 +5872,6 @@ document.getElementById('ov').addEventListener('change', e => {
   if (lsoaLyr) { lsoaLyr.eachLayer(l => l.setStyle(imdStyle(l.feature, l.feature.properties.code === selLSOA ? 'selected' : 'default'))); applyLSOAFilter(); }
   // Keep neighbourhood borders visible on top of choropleth
   if (nbhdBorderLyr) { nbhdBorderLyr.bringToFront(); if (boroughL._map) boroughL.bringToFront(); }
-  // Re-evaluate level-mismatch warning whenever overlay changes.
-  if (typeof _refreshOverlayLevelWarning === 'function') _refreshOverlayLevelWarning();
   // Refresh the Top/Bottom 20 rankings for the new indicator.
   renderTopBottom();
   // Switch to overlay tab
