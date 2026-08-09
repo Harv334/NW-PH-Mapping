@@ -162,6 +162,29 @@ def write_bytes_atomic(path: Path, payload: bytes) -> None:
             pass
         os.replace(tmp, path)
 
+def write_parquet_guarded(path: Path, df: "pd.DataFrame", *, source: str) -> "pd.DataFrame":
+    """
+    Write a parquet, refusing to replace a non-empty file with an empty one.
+
+    An empty frame almost always means the fetch failed rather than the real
+    world emptying out, and nothing downstream reads it as an error: a 0-row
+    parquet has no columns at all, so the builders' `"WD25CD" in df.columns`
+    guards read it as "this source has nothing to say" and quietly drop the
+    indicators. Keeping the last good file is the safer failure, and the caller
+    still sees the warning.
+    """
+    if len(df) == 0 and path.exists():
+        try:
+            existing = pd.read_parquet(path)
+        except Exception:
+            existing = None
+        if existing is not None and len(existing) > 0:
+            warn(f"{source}: produced 0 rows but {path.name} already holds "
+                 f"{len(existing):,}; keeping the existing file")
+            return existing
+    write_parquet_atomic(path, df)
+    return df
+
 def _scrub_nan(obj):
     """Recursively replace NaN/Infinity with None so JSON is browser-parseable."""
     import math
@@ -449,6 +472,8 @@ POSTCODES_IO_TERMINATED = "https://api.postcodes.io/terminated_postcodes/{pc}"
 PC_BATCH             = 100    # postcodes.io rejects bulk requests above this
 PC_CACHE_PATH        = CACHE_DIR / "postcodes" / "postcodes_io.json"
 PC_NEGATIVE_TTL_DAYS = 90     # re-check misses: new postcodes appear quarterly
+PC_MIN_RESOLVED      = 0.5    # below this share resolved, assume upstream broke
+PC_MASS_FAILURE_MIN  = 20     # ...but only judge the share on a decent sample
 
 _PC_CACHE: dict | None = None
 _PC_NEG_STAMP: str = ""
@@ -602,6 +627,24 @@ def lookup_postcodes(postcodes, *, source: str,
             if revived:
                 ok(f"{source}: {revived:,} of {len(unmatched):,} recovered as "
                    "terminated postcodes (placed by boundary lookup)")
+
+    resolved = sum(1 for p in wanted if cache.get(p))
+    # A handful of unresolved postcodes is normal (bad data in the charity
+    # register, mostly). Nearly all of them failing is not: postcodes.io answers
+    # an unknown postcode with a 200 and a null result, so a bad upstream
+    # response looks exactly like "none of these places exist" and would
+    # otherwise sail through as an empty result set. Raise before saving the
+    # cache, so a bad response is not persisted as negatives and replayed for
+    # the whole 90-day TTL.
+    if wanted and (resolved == 0 or
+                   (len(wanted) >= PC_MASS_FAILURE_MIN
+                    and resolved < len(wanted) * PC_MIN_RESOLVED)):
+        raise RuntimeError(
+            f"{source}: only {resolved:,} of {len(wanted):,} postcodes resolved "
+            f"via postcodes.io. Treating this as an upstream failure rather "
+            f"than an empty result ({POSTCODES_IO_BULK})"
+        )
+    if todo:
         _pc_cache_save()
 
     missing = [p for p in wanted if not cache.get(p)]
@@ -833,7 +876,7 @@ def run_gp_practices() -> pd.DataFrame:
         })
     out = pd.DataFrame(rows)
     out_path = DATA_DIR / "healthcare" / "gp_practices.parquet"
-    write_parquet_atomic(out_path, out)
+    out = write_parquet_guarded(out_path, out, source="gp_practices")
     ok(f"gp_practices: {len(out):,} rows -> {out_path.relative_to(REPO_ROOT)}")
     return out
 
@@ -892,7 +935,7 @@ def run_pharmacies() -> pd.DataFrame:
         })
     out = pd.DataFrame(rows)
     out_path = DATA_DIR / "healthcare" / "pharmacies.parquet"
-    write_parquet_atomic(out_path, out)
+    out = write_parquet_guarded(out_path, out, source="pharmacies")
     ok(f"pharmacies: {len(out):,} rows -> {out_path.relative_to(REPO_ROOT)}")
     return out
 
@@ -2308,18 +2351,7 @@ def run_police_crime(months_back: int = 12) -> pd.DataFrame:
         })
     out = pd.DataFrame(rows)
     out_path = DATA_DIR / "crime" / "police_uk_crime.parquet"
-    # Safeguard: never clobber a good existing parquet with an empty one
-    # (network blocked, API down, polygon regression, etc).
-    if len(out) == 0 and out_path.exists():
-        try:
-            existing = pd.read_parquet(out_path)
-            if len(existing) > 0:
-                warn(f"police_uk_crime: fetched 0 rows but {out_path.name} "
-                     f"already has {len(existing):,} — keeping existing file.")
-                return existing
-        except Exception:
-            pass
-    write_parquet_atomic(out_path, out)
+    out = write_parquet_guarded(out_path, out, source="police_uk_crime")
     ok(f"police_uk_crime: {len(out):,} crimes -> {out_path.relative_to(REPO_ROOT)}")
     return out
 
@@ -2392,7 +2424,7 @@ def run_hospitals() -> pd.DataFrame | None:
         })
     out = pd.DataFrame(rows)
     out_path = DATA_DIR / "healthcare" / "hospitals.parquet"
-    write_parquet_atomic(out_path, out)
+    out = write_parquet_guarded(out_path, out, source="hospitals")
     ok(f"hospitals: {len(out):,} rows -> {out_path.relative_to(REPO_ROOT)}")
     return out
 
@@ -2743,7 +2775,7 @@ def run_charities():
     out = pd.DataFrame(rows)
     out_path = DATA_DIR / "vcse" / "charities.parquet"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    write_parquet_atomic(out_path, out)
+    out = write_parquet_guarded(out_path, out, source="vcse")
     ok(f"vcse: {len(out):,} rows -> {out_path.relative_to(REPO_ROOT)}")
     return out
 
