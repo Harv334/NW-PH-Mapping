@@ -24,11 +24,6 @@ from open APIs on the fly.
       https://digital.nhs.uk/services/organisation-data-service/export-data-files/csv-downloads/gp-and-gp-practice-related-data
       (click the 'epraccur.zip' link)
 
-  .cache/pharmacies/edispensary.csv               (~3.5 MB, required)
-      NHS BSA monthly dispensing list. Download the latest month from
-      https://www.nhsbsa.nhs.uk/  (the script will try to auto-discover the
-      latest URL but the monthly slug changes - manual is more reliable).
-
   .cache/hospitals/Hospital.csv                   [optional]
       NHS.uk dataset. https://www.nhs.uk/about-us/nhs-website-datasets/
       If missing, hospitals simply won't render on the map.
@@ -39,6 +34,7 @@ No cache needed - the script hits these APIs directly (cached between runs):
   - Nomis Census 2021    (topic-summary tables, ~150 MB first run, cached)
   - postcodes.io         (postcode -> LSOA / ward / borough + coordinates)
   - ONS Open Geography   (LSOA 2021 -> ward 2025 best-fit lookup)
+  - NHS ODS Data Search  (edispensary pharmacy register; ETag-revalidated)
 
 ------------------------------------------------------------------------------
 USAGE
@@ -63,6 +59,7 @@ the atomic wrappers.
 from __future__ import annotations
 
 import argparse
+import csv
 import io
 import json
 import os
@@ -141,6 +138,33 @@ def write_atomic(path: Path, text: str) -> None:
             f"(wrote {actual} of {expected} bytes)"
         )
     os.replace(tmp, path)
+
+def write_bytes_atomic(path: Path, payload: bytes) -> None:
+    """Byte-oriented sibling of write_atomic, for downloaded files we must not decode."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as f:
+        f.write(payload)
+        f.flush()
+        os.fsync(f.fileno())
+    actual = tmp.stat().st_size
+    if actual != len(payload):
+        try: tmp.unlink()
+        except Exception: pass
+        raise IOError(
+            f"write_bytes_atomic: short write to {tmp} "
+            f"(wrote {actual} of {len(payload)} bytes)"
+        )
+    try:
+        os.replace(tmp, path)
+    except PermissionError:
+        # Some cached downloads were dropped in read-only; Windows refuses to
+        # replace those. Clear the flag and retry rather than failing the source.
+        try:
+            os.chmod(path, 0o666)
+        except OSError:
+            pass
+        os.replace(tmp, path)
 
 def _scrub_nan(obj):
     """Recursively replace NaN/Infinity with None so JSON is browser-parseable."""
@@ -234,6 +258,163 @@ def _http_json(method: str, url: str, *, source: str, session=None,
     raise RuntimeError(
         f"{source}: request failed after {attempts} attempts ({url}): {last}"
     )
+
+# ============================================================================
+# NHS ODS bulk extracts - Data Search and Export portal
+# ============================================================================
+# ODS publishes its bulk organisation extracts (pharmacies, GP practices, ...)
+# as headerless, fully quoted, 27-column CSV. The old bulk-zip route under
+# files.digital.nhs.uk/assets/ods/current/ now returns 403 for every extract, so
+# the Data Search and Export API below is the live source. `report` is the ODS
+# extract code: 'edispensary' for pharmacies, 'epraccur' for GP practices.
+ODS_EXPORT_URL = "https://www.odsdatasearchandexport.nhs.uk/api/getReport?report={report}"
+
+# The 27-column ODS standard extract layout. Shared by every bulk extract, so
+# both epraccur (GP practices) and edispensary (pharmacies) are read with it.
+EPRACCUR_HEADER = [
+    "OrganisationCode", "Name", "NationalGrouping", "HighLevelHealthGeography",
+    "AddressLine1", "AddressLine2", "AddressLine3", "AddressLine4", "AddressLine5",
+    "Postcode", "OpenDate", "CloseDate", "StatusCode", "OrganisationSubTypeCode",
+    "Commissioner", "JoinProviderDate", "LeftProviderDate", "ContactTelephoneNumber",
+    "_n1", "_n2", "_n3", "AmendedRecordIndicator", "_n4",
+    "ProviderPurchaser", "_n5", "PrescribingSetting", "_n6",
+]
+ODS_FIELD_COUNT = len(EPRACCUR_HEADER)      # 27
+
+def _http_bytes(url: str, *, source: str, headers: dict | None = None,
+                timeout: int = 180, attempts: int = 4):
+    """GET returning the requests.Response, with backoff. Raises naming `source`."""
+    delay = 1.0
+    last = "no attempt made"
+    for i in range(attempts):
+        try:
+            r = requests.get(url, headers=headers or {}, timeout=timeout)
+            if r.status_code in (200, 304):
+                return r
+            last = f"HTTP {r.status_code}"
+        except Exception as e:
+            last = f"{type(e).__name__}: {e}"
+        if i < attempts - 1:
+            time.sleep(delay)
+            delay *= 2
+    raise RuntimeError(
+        f"{source}: download failed after {attempts} attempts ({url}): {last}"
+    )
+
+def _validate_ods_extract(raw: bytes, *, source: str, report: str,
+                          code_prefix: str, role_codes: set[str],
+                          min_active: int) -> int:
+    """
+    Check a downloaded ODS extract really is the report we asked for, and return
+    its active-row count.
+
+    Every check here exists because the failure it catches is otherwise silent.
+    pandas reads a headerless CSV against a fixed name list without complaining
+    when the upstream width changes, so a new ODS column would shift every field
+    one place and quietly corrupt postcodes. Likewise all ODS reports share this
+    layout, so a wrong `report` code returns a perfectly well-formed file of the
+    wrong organisations.
+    """
+    try:
+        rows = [r for r in csv.reader(io.StringIO(raw.decode("latin-1"), newline="")) if r]
+    except csv.Error as e:
+        # A CDN error page or a truncated body served as HTTP 200 lands here.
+        raise RuntimeError(
+            f"{source}: '{report}' extract is not parseable as CSV ({e}); "
+            f"first bytes: {raw[:120]!r} ({ODS_EXPORT_URL.format(report=report)})"
+        ) from e
+    if not rows:
+        raise RuntimeError(f"{source}: {report} extract is empty ({ODS_EXPORT_URL.format(report=report)})")
+
+    widths = {len(r) for r in rows}
+    if widths != {ODS_FIELD_COUNT}:
+        raise RuntimeError(
+            f"{source}: {report} extract has {sorted(widths)} fields per row, "
+            f"expected {ODS_FIELD_COUNT}. The ODS layout changed - update "
+            f"EPRACCUR_HEADER before trusting this file "
+            f"({ODS_EXPORT_URL.format(report=report)})"
+        )
+    if rows[0][0].strip().lower() == "organisationcode":
+        raise RuntimeError(
+            f"{source}: {report} extract now ships a header row; the pipeline "
+            f"reads it headerless ({ODS_EXPORT_URL.format(report=report)})"
+        )
+
+    codes = [r[0] for r in rows if r[0]]
+    pct_prefix = sum(c.startswith(code_prefix) for c in codes) / max(len(codes), 1)
+    if pct_prefix < 0.90:
+        raise RuntimeError(
+            f"{source}: only {pct_prefix:.0%} of organisation codes in the "
+            f"'{report}' extract start with '{code_prefix}' - this looks like a "
+            f"different ODS report ({ODS_EXPORT_URL.format(report=report)})"
+        )
+    pct_role = sum(r[13] in role_codes for r in rows) / len(rows)
+    if pct_role < 0.90:
+        raise RuntimeError(
+            f"{source}: only {pct_role:.0%} of rows in the '{report}' extract "
+            f"carry role codes {sorted(role_codes)} - this looks like a "
+            f"different ODS report ({ODS_EXPORT_URL.format(report=report)})"
+        )
+
+    active = sum(r[12] in ("A", "ACTIVE") for r in rows)
+    if active < min_active:
+        raise RuntimeError(
+            f"{source}: '{report}' extract has only {active:,} active rows "
+            f"(expected at least {min_active:,}) - looks truncated "
+            f"({ODS_EXPORT_URL.format(report=report)})"
+        )
+    return active
+
+def fetch_ods_report(report: str, cache: Path, *, source: str,
+                     code_prefix: str, role_codes: set[str],
+                     min_active: int) -> Path:
+    """
+    Refresh a cached ODS extract from the Data Search and Export API.
+
+    The response carries an ETag but no Last-Modified, and the URL has no
+    version in it, so the ETag is the only freshness signal available. It is
+    kept in a sidecar next to the cache and replayed as If-None-Match, which
+    makes a rerun with no upstream change a single cheap 304. A download that
+    fails or fails validation leaves an existing cache in place rather than
+    taking the whole source down with it.
+    """
+    url = ODS_EXPORT_URL.format(report=report)
+    etag_path = cache.with_name(cache.name + ".etag")
+    cached_etag = ""
+    if cache.exists() and etag_path.exists():
+        try:
+            cached_etag = etag_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            cached_etag = ""
+
+    headers = {"If-None-Match": cached_etag} if cached_etag else {}
+    try:
+        r = _http_bytes(url, source=source, headers=headers)
+        if r.status_code == 304:
+            ok(f"{report}: cached copy still current (ETag {cached_etag})")
+            return cache
+        active = _validate_ods_extract(
+            r.content, source=source, report=report, code_prefix=code_prefix,
+            role_codes=role_codes, min_active=min_active,
+        )
+        write_bytes_atomic(cache, r.content)
+        etag = r.headers.get("ETag", "")
+        if etag:
+            write_atomic(etag_path, etag)
+        elif etag_path.exists():
+            etag_path.unlink()          # no ETag upstream: don't replay a stale one
+        ok(f"{report}: downloaded {len(r.content)/1e6:.2f} MB, "
+           f"{active:,} active rows")
+    except Exception as e:
+        if cache.exists():
+            warn(f"{source}: refresh failed ({e}); using the cached "
+                 f"{cache.name} from {datetime.fromtimestamp(cache.stat().st_mtime, timezone.utc):%Y-%m-%d}")
+            return cache
+        raise RuntimeError(
+            f"{source}: could not download the '{report}' ODS extract and no "
+            f"cached copy exists at {cache}. Source: {url}"
+        ) from e
+    return cache
 
 # ============================================================================
 # Postcode lookup - postcodes.io bulk API
@@ -551,15 +732,6 @@ def bng_to_wgs84(e: float, n: float) -> tuple[float, float]:
 # ============================================================================
 # SOURCE 1: GP practices  (NHS ODS EPRACCUR)
 # ============================================================================
-EPRACCUR_HEADER = [
-    "OrganisationCode", "Name", "NationalGrouping", "HighLevelHealthGeography",
-    "AddressLine1", "AddressLine2", "AddressLine3", "AddressLine4", "AddressLine5",
-    "Postcode", "OpenDate", "CloseDate", "StatusCode", "OrganisationSubTypeCode",
-    "Commissioner", "JoinProviderDate", "LeftProviderDate", "ContactTelephoneNumber",
-    "_n1", "_n2", "_n3", "AmendedRecordIndicator", "_n4",
-    "ProviderPurchaser", "_n5", "PrescribingSetting", "_n6",
-]
-
 def run_gp_practices() -> pd.DataFrame:
     rule("GP practices (NHS ODS EPRACCUR)")
     cache_dir = CACHE_DIR / "gp_practices"
@@ -641,36 +813,24 @@ def run_gp_practices() -> pd.DataFrame:
 
 
 # ============================================================================
-# SOURCE 2: Pharmacies  (NHS BSA edispensary)
+# SOURCE 2: Pharmacies  (NHS ODS edispensary)
 # ============================================================================
 def run_pharmacies() -> pd.DataFrame:
-    rule("Pharmacies (NHS BSA edispensary)")
+    rule("Pharmacies (NHS ODS edispensary)")
     cache_dir = CACHE_DIR / "pharmacies"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache = cache_dir / "edispensary.csv"
 
-    if not cache.exists():
-        info("No local cache — walking back months trying to auto-discover the latest file")
-        sess = browser_session(referer="https://www.nhsbsa.nhs.uk/")
-        found = False
-        now = datetime.utcnow()
-        for delta in range(0, 6):
-            year  = now.year if (now.month - delta) > 0 else now.year - 1
-            month = (now.month - delta - 1) % 12 + 1
-            ym = f"{year}-{month:02d}"
-            url = f"https://www.nhsbsa.nhs.uk/sites/default/files/{ym}/edispensary.csv"
-            r = sess.get(url, timeout=30)
-            if r.status_code == 200 and len(r.content) > 1000:
-                cache.write_bytes(r.content)
-                found = True
-                ok(f"edispensary: fetched {ym} slug")
-                break
-        if not found:
-            raise RuntimeError(
-                "Could not auto-discover an edispensary.csv. "
-                "Download the latest monthly file manually from "
-                "https://www.nhsbsa.nhs.uk/ and drop it at " + str(cache)
-            )
+    # Every pharmacy in the extract is an F-prefixed ODS code with a pharmacy
+    # role code (RO182 dispensing contractor, RO94 dispensing appliance
+    # contractor). GP practices, the other extract on this endpoint, are
+    # Y/M/A-prefixed with role codes B/Z - so these two checks catch a wrong
+    # report code, which would otherwise parse perfectly.
+    fetch_ods_report(
+        "edispensary", cache, source="pharmacies",
+        code_prefix="F", role_codes={"RO182", "RO94"},
+        min_active=8_000,          # ~11.3k active today; a floor, not a target
+    )
 
     df = pd.read_csv(
         cache, header=None, names=EPRACCUR_HEADER,
@@ -2632,7 +2792,7 @@ def build_ward_data() -> dict:
                  "postcode": str(r.get("postcode", "") or "")}
                 for r in grp.to_dict("records")
             ]
-        sources["pharmacy"] = "NHS BSA"
+        sources["pharmacy"] = "NHS ODS (edispensary)"
 
     crime = _read_parquet_opt(DATA_DIR / "crime" / "police_uk_crime.parquet")
     if crime is not None and "WD25CD" in crime.columns:

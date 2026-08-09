@@ -31,12 +31,18 @@ Then drop these files into `.cache/`. All are free, public downloads.
 | File | Where to drop it | Source |
 |------|------------------|--------|
 | **IMD 2025 File 7 CSV** (required, ~10 MB) | `.cache/imd2025/*.csv` | https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025 - File 7 (all ranks/scores/deciles) |
-| **EPRACCUR** (required, ~700 KB) | `.cache/gp_practices/epraccur.zip` | https://digital.nhs.uk/services/organisation-data-service/export-data-files/csv-downloads/gp-and-gp-practice-related-data |
-| **edispensary CSV** (required, ~3.5 MB) | `.cache/pharmacies/edispensary.csv` | Latest monthly from https://www.nhsbsa.nhs.uk |
+| **EPRACCUR** (required, ~700 KB) | `.cache/gp_practices/epraccur.zip` | https://digital.nhs.uk/services/organisation-data-service/data-search-and-export/csv-downloads/gp-and-gp-practice-related-data |
 | Hospital CSV (optional) | `.cache/hospitals/Hospital.csv` | https://www.nhs.uk/about-us/nhs-website-datasets/ |
 
 OHID Fingertips (health outcomes) and police.uk (crime) are API-backed -
 the script hits them directly the first time and caches the responses.
+
+The pharmacy register is API-backed. `fetch_all_data.py` pulls the NHS ODS
+`edispensary` extract from the ODS Data Search and Export API and caches it at
+`.cache/pharmacies/edispensary.csv`, alongside an `.etag` sidecar. Reruns send
+that ETag as `If-None-Match`, so an unchanged file costs a single `304` and no
+download. If the download fails or fails validation, the cached copy is kept
+and the run continues.
 
 Postcode geography is API-backed too. Postcodes are resolved to LSOA,
 ward and borough through the [postcodes.io](https://postcodes.io) bulk
@@ -82,7 +88,7 @@ For someone who just wants to refresh the map:
 
 1. Clone the repo.
 2. `pip install pandas pyarrow requests pyproj shapely`
-3. Download the three required files listed in the table above and drop
+3. Download the two required files listed in the table above and drop
    them into their respective `.cache/` subfolders.
 4. `python fetch_all_data.py`
 5. `git commit -am "data refresh YYYY-MM" && git push`
