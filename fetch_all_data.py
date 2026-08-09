@@ -15,11 +15,6 @@ MANUAL DOWNLOADS  (do this once, then rerun the script any time)
 Drop the following files in the .cache/ folder. Everything else is fetched
 from open APIs on the fly.
 
-  .cache/onspd/ONSPD_<MONTH>_<YEAR>_UK.zip        (~250 MB, required)
-      ONS Postcode Directory. Download the latest release from
-      https://geoportal.statistics.gov.uk/  (search 'ONS Postcode Directory'
-      and grab the 'full' zip). Re-download quarterly for freshness.
-
   .cache/imd2025/File_7_IoD2025_All_Ranks_...csv  (~10 MB, required)
       Index of Multiple Deprivation 2025 - File 7 (all domains).
       https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025
@@ -42,7 +37,8 @@ No cache needed - the script hits these APIs directly (cached between runs):
   - OHID Fingertips      (health outcomes per LAD)
   - data.police.uk       (crime per borough polygon per month)
   - Nomis Census 2021    (topic-summary tables, ~150 MB first run, cached)
-  - Nomis Census 2021    (topic-summary tables, ~150 MB first run, cached)
+  - postcodes.io         (postcode -> LSOA / ward / borough + coordinates)
+  - ONS Open Geography   (LSOA 2021 -> ward 2025 best-fit lookup)
 
 ------------------------------------------------------------------------------
 USAGE
@@ -67,7 +63,6 @@ the atomic wrappers.
 from __future__ import annotations
 
 import argparse
-import csv
 import io
 import json
 import os
@@ -204,59 +199,298 @@ def browser_session(referer: str | None = None) -> requests.Session:
 def normalise_postcode(pc: str) -> str:
     return (pc or "").replace(" ", "").upper().strip()
 
+def postcode_area(pc: str) -> str:
+    """Leading letters of the outward code: 'W8 5SF' -> 'W', 'HA1 3HP' -> 'HA'."""
+    m = re.match(r"^[A-Z]+", normalise_postcode(pc))
+    return m.group(0) if m else ""
+
+def _http_json(method: str, url: str, *, source: str, session=None,
+               json_body=None, params=None, timeout: int = 60,
+               attempts: int = 4):
+    """
+    GET/POST returning parsed JSON, with exponential backoff. Returns None on a
+    404 (a legitimate 'not found' for the endpoints used here). Raises
+    RuntimeError naming `source` once the attempts are exhausted.
+    """
+    sess = session or requests
+    delay = 1.0
+    last = "no attempt made"
+    for i in range(attempts):
+        try:
+            r = sess.request(method, url, json=json_body, params=params,
+                             timeout=timeout)
+            if r.status_code == 404:
+                return None
+            if r.status_code in (429, 500, 502, 503, 504):
+                last = f"HTTP {r.status_code}"
+            else:
+                r.raise_for_status()
+                return r.json()
+        except Exception as e:                      # network, JSON, 4xx
+            last = f"{type(e).__name__}: {e}"
+        if i < attempts - 1:
+            time.sleep(delay)
+            delay *= 2
+    raise RuntimeError(
+        f"{source}: request failed after {attempts} attempts ({url}): {last}"
+    )
+
 # ============================================================================
-# ONSPD postcode lookup — built once from the zip, cached in-memory
+# Postcode lookup - postcodes.io bulk API
 # ============================================================================
+# Replaces the old ~250 MB ONSPD manual download. postcodes.io is an open API
+# over the same ONS Postcode Directory, so the fields line up 1:1 with the
+# columns the ONSPD path used to read:
+#     codes.lsoa21          -> LSOA21CD
+#     codes.admin_district  -> LAD25CD
+#     codes.admin_ward      -> WD25CD
+# Only postcodes whose area is in POSTCODE_AREAS are queried. That is the same
+# subset the ONSPD path loaded (it only opened the multi_csv files for those
+# areas), so anything outside NW London stays unresolved exactly as before.
+POSTCODES_IO_BULK       = "https://api.postcodes.io/postcodes"
+POSTCODES_IO_TERMINATED = "https://api.postcodes.io/terminated_postcodes/{pc}"
+PC_BATCH             = 100    # postcodes.io rejects bulk requests above this
+PC_CACHE_PATH        = CACHE_DIR / "postcodes" / "postcodes_io.json"
+PC_NEGATIVE_TTL_DAYS = 90     # re-check misses: new postcodes appear quarterly
+
+_PC_CACHE: dict | None = None
+_PC_NEG_STAMP: str = ""
+
+def _days_since(iso_date: str) -> float:
+    try:
+        d = datetime.fromisoformat(iso_date).date()
+    except (TypeError, ValueError):
+        return float("inf")
+    return (datetime.now(timezone.utc).date() - d).days
+
+def _pc_cache() -> dict:
+    """Postcode cache, keyed by space-stripped postcode. None value = a miss."""
+    global _PC_CACHE, _PC_NEG_STAMP
+    if _PC_CACHE is not None:
+        return _PC_CACHE
+    entries: dict = {}
+    stamp = ""
+    if PC_CACHE_PATH.exists():
+        try:
+            blob = json.loads(PC_CACHE_PATH.read_text(encoding="utf-8"))
+            entries = blob.get("postcodes") or {}
+            stamp = blob.get("negatives_checked") or ""
+        except (OSError, ValueError) as e:
+            warn(f"postcodes.io: cache unreadable ({e}); starting a fresh one")
+            entries = {}
+            stamp = ""
+    # Cached misses are dropped periodically. A postcode created since the last
+    # ONS release misses once and then starts resolving; a permanent cache entry
+    # would hide it forever.
+    if _days_since(stamp) > PC_NEGATIVE_TTL_DAYS:
+        stale = sum(1 for v in entries.values() if not v)
+        if stale:
+            info(f"postcodes.io: re-checking {stale:,} cached misses "
+                 f"(older than {PC_NEGATIVE_TTL_DAYS} days)")
+        entries = {k: v for k, v in entries.items() if v}
+        stamp = datetime.now(timezone.utc).date().isoformat()
+    _PC_CACHE, _PC_NEG_STAMP = entries, stamp
+    return _PC_CACHE
+
+def _pc_cache_save() -> None:
+    if _PC_CACHE is None:
+        return
+    write_json_atomic(PC_CACHE_PATH, {
+        "negatives_checked": _PC_NEG_STAMP,
+        "postcodes": _PC_CACHE,
+    })
+
+def _pc_record(res: dict) -> dict | None:
+    """One postcodes.io result -> cache record, or None if it is unusable."""
+    codes = res.get("codes") or {}
+    lat, lng = res.get("latitude"), res.get("longitude")
+    if lat is None or lng is None:
+        return None
+    return {
+        "lat": float(lat),
+        "lng": float(lng),
+        "lsoa": codes.get("lsoa21") or codes.get("lsoa") or "",
+        "lad":  codes.get("admin_district") or "",
+        "wd":   codes.get("admin_ward") or "",
+        "src":  "live",
+    }
+
+def _codes_from_point(lat: float, lng: float) -> tuple[str, str, str] | None:
+    """(LSOA21CD, LAD25CD, WD25CD) by point-in-polygon on the local boundaries."""
+    try:
+        wards_idx = load_boundary_index("wards")
+        lsoa_idx  = load_boundary_index("lsoa")
+    except (FileNotFoundError, ImportError):
+        return None
+    wp = wards_idx.find(lng, lat)
+    if not wp:
+        return None                       # outside the mapped footprint
+    lp = lsoa_idx.find(lng, lat) or {}
+    return (
+        lp.get("LSOA21CD") or lp.get("code") or "",
+        wp.get("LAD25CD") or wp.get("LAD24CD") or "",
+        wp.get("WD25CD") or wp.get("WD24CD") or "",
+    )
+
+def _lookup_terminated(pc: str, *, source: str, session) -> dict | None:
+    """
+    Retry one postcode against the terminated-postcodes endpoint. That endpoint
+    returns a grid reference but no area codes, so LSOA/ward/LAD come from a
+    point-in-polygon against the local boundary GeoJSONs.
+    """
+    payload = _http_json("GET", POSTCODES_IO_TERMINATED.format(pc=pc),
+                         source=source, session=session, timeout=30)
+    res = (payload or {}).get("result") or {}
+    lat, lng = res.get("latitude"), res.get("longitude")
+    if lat is None or lng is None:
+        return None
+    codes = _codes_from_point(float(lat), float(lng))
+    if codes is None:
+        return None
+    lsoa, lad, wd = codes
+    return {"lat": float(lat), "lng": float(lng),
+            "lsoa": lsoa, "lad": lad, "wd": wd, "src": "terminated"}
+
+def lookup_postcodes(postcodes, *, source: str,
+                     owners: dict | None = None) -> dict:
+    """
+    Resolve postcodes to {postcode_no_spaces: (lat, lng, LSOA21CD, LAD25CD,
+    WD25CD)} via the postcodes.io bulk API.
+
+    Results are cached in .cache/postcodes/ keyed by postcode, so reruns are
+    free. Postcodes the bulk endpoint does not know are retried individually
+    against the terminated-postcodes endpoint. `owners` maps a space-stripped
+    postcode to a human label (practice, pharmacy or charity name) so anything
+    still unresolved can be logged against the record it belongs to.
+    """
+    wanted = sorted({normalise_postcode(p) for p in postcodes})
+    wanted = [p for p in wanted if p and postcode_area(p) in POSTCODE_AREAS]
+    cache = _pc_cache()
+    todo = [p for p in wanted if p not in cache]
+
+    if todo:
+        info(f"{source}: resolving {len(todo):,} postcodes via postcodes.io "
+             f"({len(wanted) - len(todo):,} already cached)")
+        sess = requests.Session()
+        unmatched: list[str] = []
+        for i in range(0, len(todo), PC_BATCH):
+            batch = todo[i:i + PC_BATCH]
+            payload = _http_json("POST", POSTCODES_IO_BULK, source=source,
+                                 session=sess, json_body={"postcodes": batch})
+            results = (payload or {}).get("result")
+            if not isinstance(results, list) or len(results) != len(batch):
+                raise RuntimeError(
+                    f"{source}: postcodes.io returned "
+                    f"{len(results) if isinstance(results, list) else 'no'} "
+                    f"results for a batch of {len(batch)}. API shape changed? "
+                    f"({POSTCODES_IO_BULK})"
+                )
+            for item in results:
+                key = normalise_postcode(item.get("query", ""))
+                rec = _pc_record(item.get("result") or {}) if item.get("result") else None
+                if rec is None:
+                    unmatched.append(key)
+                else:
+                    cache[key] = rec
+            time.sleep(0.1)     # be polite to a free public API
+
+        if unmatched:
+            info(f"{source}: retrying {len(unmatched):,} unmatched postcodes "
+                 "against the terminated-postcodes endpoint")
+            revived = 0
+            for pc in unmatched:
+                rec = _lookup_terminated(pc, source=source, session=sess)
+                cache[pc] = rec
+                revived += bool(rec)
+            if revived:
+                ok(f"{source}: {revived:,} of {len(unmatched):,} recovered as "
+                   "terminated postcodes (placed by boundary lookup)")
+        _pc_cache_save()
+
+    missing = [p for p in wanted if not cache.get(p)]
+    if missing:
+        shown = [f"{p} ({owners.get(p, 'unknown')})" if owners else p
+                 for p in missing[:10]]
+        warn(f"{source}: {len(missing):,} postcodes unresolved: "
+             + "; ".join(shown) + (" ..." if len(missing) > 10 else ""))
+
+    out = {}
+    for p in wanted:
+        r = cache.get(p)
+        if r:
+            out[p] = (r["lat"], r["lng"], r["lsoa"], r["lad"], r["wd"])
+    return out
+
+# ============================================================================
+# LSOA -> ward mapping - ONS best-fit lookup (Open Geography Portal)
+# ============================================================================
+# The official LSOA (2021) -> Electoral Ward (2025) -> LAD (2025) best-fit
+# lookup, queried from the ONS ArcGIS feature service. This replaces voting on
+# ONSPD postcode centroids and matches the lookup ward_data.json was rebuilt
+# against (see scripts/reconfigure_to_ons_wd24_lookup.py, the 2024 vintage).
+ONS_LOOKUP_LAYER = "LSOA21_WD25_LAD25_EW_LU_v2"
+ONS_LOOKUP_URL = (
+    "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/"
+    f"{ONS_LOOKUP_LAYER}/FeatureServer/0/query"
+)
+ONS_LOOKUP_CACHE = CACHE_DIR / "ons_lookup" / f"{ONS_LOOKUP_LAYER}_nwl.json"
+ONS_LOOKUP_PAGE  = 1000        # the service's maxRecordCount
+
 @lru_cache(maxsize=1)
-def get_postcode_lookup() -> dict:
-    """Returns {postcode_no_spaces: (lat, lng, LSOA21CD, LAD25CD, WD25CD)}."""
-    cache = CACHE_DIR / "onspd"
-    zips = sorted(cache.glob("ONSPD_*_UK.zip"))
-    if not zips:
-        raise FileNotFoundError(
-            f"No ONSPD zip found in {cache}.\n"
-            "Download the latest ONS Postcode Directory from "
-            "https://geoportal.statistics.gov.uk/ "
-            "(search 'ONS Postcode Directory', grab the 'full' zip), "
-            f"and drop it at {cache}."
+def get_lsoa_ward_lookup() -> dict:
+    """{LSOA21CD: (WD25CD, LAD25CD)} for the in-scope boroughs."""
+    if ONS_LOOKUP_CACHE.exists():
+        try:
+            blob = json.loads(ONS_LOOKUP_CACHE.read_text(encoding="utf-8"))
+            if blob:
+                ok(f"ONS lookup: {len(blob):,} LSOAs (cached)")
+                return {k: tuple(v) for k, v in blob.items()}
+        except (OSError, ValueError) as e:
+            warn(f"ONS lookup: cache unreadable ({e}); refetching")
+
+    info(f"ONS lookup: fetching {ONS_LOOKUP_LAYER} for {len(NW_LADS)} boroughs")
+    where = "LAD25CD IN (" + ",".join(f"'{c}'" for c in sorted(NW_LADS)) + ")"
+    lookup: dict[str, tuple[str, str]] = {}
+    offset = 0
+    while True:
+        payload = _http_json("GET", ONS_LOOKUP_URL, source="ONS LSOA->ward lookup",
+                             params={
+                                 "where": where,
+                                 "outFields": "LSOA21CD,WD25CD,LAD25CD",
+                                 "returnGeometry": "false",
+                                 "orderByFields": "LSOA21CD",
+                                 "resultOffset": offset,
+                                 "resultRecordCount": ONS_LOOKUP_PAGE,
+                                 "f": "json",
+                             }, timeout=120)
+        if payload is None or "features" not in payload:
+            raise RuntimeError(
+                f"ONS LSOA->ward lookup: unexpected response from "
+                f"{ONS_LOOKUP_LAYER} (no 'features' key). "
+                f"Check the layer still exists: {ONS_LOOKUP_URL}"
+            )
+        feats = payload["features"]
+        for f in feats:
+            a = f.get("attributes") or {}
+            code = a.get("LSOA21CD")
+            if code:
+                lookup[code] = (a.get("WD25CD") or "", a.get("LAD25CD") or "")
+        if not feats or not payload.get("exceededTransferLimit"):
+            break
+        offset += len(feats)
+
+    if not lookup:
+        raise RuntimeError(
+            f"ONS LSOA->ward lookup: {ONS_LOOKUP_LAYER} returned no rows for "
+            f"LAD25CD in {sorted(NW_LADS)}. Has the ward vintage moved on?"
         )
-    path = zips[-1]
-    info(f"ONSPD: loading from {path.name}")
-    lk: dict = {}
-    with zipfile.ZipFile(path) as z:
-        for member in z.namelist():
-            if not member.endswith(".csv") or "/multi_csv/" not in member:
-                continue
-            # Filename like ONSPD_FEB_2026_UK_NW.csv
-            stem = Path(member).stem
-            area = stem.split("_")[-1]
-            if area not in POSTCODE_AREAS:
-                continue
-            with z.open(member) as raw:
-                text = io.TextIOWrapper(raw, encoding="utf-8")
-                r = csv.DictReader(text)
-                for row in r:
-                    if (row.get("doterm") or "").strip():
-                        continue  # terminated postcode
-                    try:
-                        lat = float(row["lat"])
-                        lng = float(row["long"])
-                    except (ValueError, TypeError, KeyError):
-                        continue
-                    if lat == 99.999999:
-                        continue  # ONSPD sentinel for 'no grid ref'
-                    pcd = normalise_postcode(row.get("pcds", ""))
-                    if not pcd:
-                        continue
-                    lk[pcd] = (
-                        lat, lng,
-                        row.get("lsoa21cd", ""),
-                        row.get("lad25cd", ""),
-                        row.get("wd25cd", ""),
-                    )
-    ok(f"ONSPD: loaded {len(lk):,} active postcodes "
-       f"(areas: {', '.join(POSTCODE_AREAS)})")
-    return lk
+    write_json_atomic(ONS_LOOKUP_CACHE, {k: list(v) for k, v in lookup.items()})
+    ok(f"ONS lookup: {len(lookup):,} LSOAs across {len(NW_LADS)} boroughs")
+    return lookup
+
+def get_lsoa_to_ward() -> dict:
+    """{LSOA21CD: WD25CD}: the mapping used by the ward-level aggregations."""
+    return {lc: wd for lc, (wd, _lad) in get_lsoa_ward_lookup().items()}
 
 # ============================================================================
 # Boundary / point-in-polygon helpers (lazy, only load when needed)
@@ -372,7 +606,10 @@ def run_gp_practices() -> pd.DataFrame:
             & (setting.str.contains("RO76", na=False))
         ]
 
-    lookup = get_postcode_lookup()
+    owners = {normalise_postcode(r["Postcode"]): (r["Name"] or "").title()
+              for _, r in df.iterrows() if normalise_postcode(r["Postcode"])}
+    lookup = lookup_postcodes(owners.keys(), source="gp_practices", owners=owners)
+
     rows = []
     for _, r in df.iterrows():
         pc = normalise_postcode(r["Postcode"])
@@ -441,7 +678,10 @@ def run_pharmacies() -> pd.DataFrame:
     )
     df = df[df["StatusCode"].isin(["A", "ACTIVE"])]
 
-    lookup = get_postcode_lookup()
+    owners = {normalise_postcode(r.get("Postcode", "")): (r.get("Name") or "").title()
+              for _, r in df.iterrows() if normalise_postcode(r.get("Postcode", ""))}
+    lookup = lookup_postcodes(owners.keys(), source="pharmacies", owners=owners)
+
     rows = []
     for _, r in df.iterrows():
         pc = normalise_postcode(r.get("Postcode", ""))
@@ -1052,21 +1292,14 @@ def run_claimant_count() -> pd.DataFrame:
     # NWL LSOA lists, chunked into ~500-code requests.
     cache = cache_dir / "claimant_nwl_latest_v3.csv"
 
-    # Build the NW London LSOA set from ONSPD (LAD24CDs for the 8 NWL ICS
-    # boroughs). Camden (E09000007) is NCL, not NWL - excluded.
-    NWL_LAD_CODES = {
-        "E09000005", "E09000009", "E09000013", "E09000015",
-        "E09000017", "E09000018", "E09000020", "E09000033",
-    }
+    # The NW London LSOA set comes from the ONS best-fit lookup, which is scoped
+    # to NW_LADS (the 8 NWL ICS boroughs; Camden is NCL, not NWL).
     try:
-        pc_lookup = get_postcode_lookup()
+        nwl_lsoas = set(get_lsoa_ward_lookup())
     except Exception as e:
-        warn(f"claimant count: ONSPD unavailable ({e}); cannot scope to NWL")
+        warn(f"claimant count: ONS LSOA->ward lookup unavailable ({e}); "
+             "cannot scope to NWL")
         return pd.DataFrame()
-    nwl_lsoas: set[str] = set()
-    for _, (_lat, _lng, lsoa, lad, _wd) in pc_lookup.items():
-        if lad in NWL_LAD_CODES and lsoa:
-            nwl_lsoas.add(lsoa)
     info(f"  NWL LSOA set: {len(nwl_lsoas):,} codes")
     if not nwl_lsoas:
         warn("claimant count: empty NWL LSOA set; nothing to fetch")
@@ -1936,7 +2169,14 @@ def run_hospitals() -> pd.DataFrame | None:
     lng_c  = col("long") or col("lng")
     type_c = col("organisationtype") or col("sector") or col("type")
 
-    lookup = get_postcode_lookup()
+    owners = {}
+    if pc_c:
+        for _, r in df.iterrows():
+            pc = normalise_postcode(r.get(pc_c, ""))
+            if pc:
+                owners[pc] = str(r.get(name_c, "") if name_c else "")
+    lookup = lookup_postcodes(owners.keys(), source="hospitals", owners=owners)
+
     rows = []
     for _, r in df.iterrows():
         pc = normalise_postcode(r.get(pc_c, "") if pc_c else "")
@@ -2172,7 +2412,34 @@ def run_charities():
     main_rows = _ccew_read_json(main_zip)
     info(f"CCEW: {len(main_rows):,} charity rows in extract")
 
-    lookup = get_postcode_lookup()
+    def _ccew_keep(r: dict) -> int:
+        """Charity number if this row is a registered, non-subsidiary charity
+        covering NWL; 0 otherwise. Used both to pre-collect postcodes and to
+        filter the main pass, so the two stay in step."""
+        if (r.get("charity_registration_status") or "").lower() != "registered":
+            return 0
+        try:
+            if int(r.get("linked_charity_number") or 0) > 0:
+                return 0
+            num = int(r.get("organisation_number")
+                      or r.get("registered_charity_number") or 0)
+        except (TypeError, ValueError):
+            return 0
+        return num if num and num in covers_map else 0
+
+    # Resolve HQ postcodes for the charities we are keeping. lookup_postcodes()
+    # restricts to POSTCODE_AREAS, so an HQ outside NW London stays unplaced
+    # exactly as it did under ONSPD.
+    ccew_owners: dict[str, str] = {}
+    for r in main_rows:
+        if not _ccew_keep(r):
+            continue
+        pc = normalise_postcode(r.get("charity_contact_postcode") or "")
+        if pc:
+            ccew_owners[pc] = (r.get("charity_name") or "").strip()
+    lookup = lookup_postcodes(ccew_owners.keys(), source="charities",
+                              owners=ccew_owners)
+
     charities: dict[int, dict] = {}
     skipped_removed = skipped_linked = skipped_no_coverage = 0
     no_geocode = hq_outside_nwl = 0
@@ -2401,21 +2668,8 @@ def build_ward_data() -> dict:
     cen = _read_parquet_opt(DATA_DIR / "demographics" / "census2021.parquet")
     if cen is not None and not cen.empty:
         sources["census"] = "ONS Census 2021 (Nomis)"
-        # Build LSOA21CD -> WD25CD mapping using ONSPD postcodes. The modal
-        # (most-common) ward across postcodes in that LSOA wins.
-        lookup = get_postcode_lookup()
-        from collections import Counter, defaultdict
-        # get_postcode_lookup() returns {pc: (lat, lng, LSOA21CD, LAD25CD, WD25CD)}
-        lsoa_to_ward_votes = defaultdict(Counter)
-        for rec in lookup.values():
-            if not isinstance(rec, (tuple, list)) or len(rec) < 5:
-                continue
-            lc = rec[2] or ""
-            wd = rec[4] or ""
-            if lc and wd:
-                lsoa_to_ward_votes[lc][wd] += 1
-        lsoa_to_ward = {lc: votes.most_common(1)[0][0]
-                        for lc, votes in lsoa_to_ward_votes.items()}
+        # LSOA21CD -> WD25CD from the ONS best-fit lookup.
+        lsoa_to_ward = get_lsoa_to_ward()
 
         pop_by_lsoa = dict(zip(
             cen["LSOA21CD"].astype(str),
@@ -2458,15 +2712,7 @@ def build_ward_data() -> dict:
     # Reuses lsoa_to_ward + pop_by_lsoa built in the census block above. If
     # census was absent both dicts may be missing, so guard for that.
     if "lsoa_to_ward" not in locals():
-        lookup = get_postcode_lookup()
-        from collections import Counter as _Ctr3, defaultdict as _dd3
-        _votes = _dd3(_Ctr3)
-        for rec in lookup.values():
-            if isinstance(rec, (tuple, list)) and len(rec) >= 5:
-                lc, wd = rec[2] or "", rec[4] or ""
-                if lc and wd:
-                    _votes[lc][wd] += 1
-        lsoa_to_ward = {lc: v.most_common(1)[0][0] for lc, v in _votes.items()}
+        lsoa_to_ward = get_lsoa_to_ward()
     if "pop_by_lsoa" not in locals():
         pop_by_lsoa = {}
 
@@ -2560,15 +2806,7 @@ def build_ward_data() -> dict:
     if imd is not None and "imd_decile" in imd.columns:
         # Reuse the LSOA->ward map built for census; rebuild if census was absent.
         if "lsoa_to_ward" not in locals():
-            lookup = get_postcode_lookup()
-            from collections import Counter as _Ctr, defaultdict as _dd2
-            votes = _dd2(_Ctr)
-            for rec in lookup.values():
-                if isinstance(rec, (tuple, list)) and len(rec) >= 5:
-                    lc, wd = rec[2] or "", rec[4] or ""
-                    if lc and wd:
-                        votes[lc][wd] += 1
-            lsoa_to_ward = {lc: v.most_common(1)[0][0] for lc, v in votes.items()}
+            lsoa_to_ward = get_lsoa_to_ward()
         core20_wards: set = set()
         n_core20_lsoas: dict = {}
         n_ward_lsoas: dict = {}
@@ -2595,6 +2833,11 @@ def build_ward_data() -> dict:
             "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "sources": sources,
             "claimant_period": "",
+            # Provenance for the LSOA -> ward attribution behind every
+            # LSOA-derived ward indicator above.
+            "lsoa_to_ward_lookup":
+                "ONS LSOA (2021) -> Electoral Ward (2025) -> LAD (2025) best-fit",
+            "lsoa_to_ward_lookup_year": "2025",
         },
     }
 

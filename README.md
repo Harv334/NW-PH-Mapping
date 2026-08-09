@@ -30,7 +30,6 @@ Then drop these files into `.cache/`. All are free, public downloads.
 
 | File | Where to drop it | Source |
 |------|------------------|--------|
-| **ONSPD zip** (required, ~250 MB) | `.cache/onspd/ONSPD_*_UK.zip` | https://geoportal.statistics.gov.uk - search "ONS Postcode Directory", download the latest quarterly "full" zip |
 | **IMD 2025 File 7 CSV** (required, ~10 MB) | `.cache/imd2025/*.csv` | https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025 - File 7 (all ranks/scores/deciles) |
 | **EPRACCUR** (required, ~700 KB) | `.cache/gp_practices/epraccur.zip` | https://digital.nhs.uk/services/organisation-data-service/export-data-files/csv-downloads/gp-and-gp-practice-related-data |
 | **edispensary CSV** (required, ~3.5 MB) | `.cache/pharmacies/edispensary.csv` | Latest monthly from https://www.nhsbsa.nhs.uk |
@@ -38,6 +37,14 @@ Then drop these files into `.cache/`. All are free, public downloads.
 
 OHID Fingertips (health outcomes) and police.uk (crime) are API-backed -
 the script hits them directly the first time and caches the responses.
+
+Postcode geography is API-backed too. Postcodes are resolved to LSOA,
+ward and borough through the [postcodes.io](https://postcodes.io) bulk
+API, cached per postcode in `.cache/postcodes/postcodes_io.json`, and
+LSOAs are attributed to wards using the ONS
+`LSOA21_WD25_LAD25_EW_LU_v2` best-fit lookup from the Open Geography
+Portal, cached in `.cache/ons_lookup/`. Neither needs a manual download,
+so the old 250 MB ONSPD zip is no longer required.
 
 ## Running
 
@@ -75,7 +82,7 @@ For someone who just wants to refresh the map:
 
 1. Clone the repo.
 2. `pip install pandas pyarrow requests pyproj shapely`
-3. Download the four required files listed in the table above and drop
+3. Download the three required files listed in the table above and drop
    them into their respective `.cache/` subfolders.
 4. `python fetch_all_data.py`
 5. `git commit -am "data refresh YYYY-MM" && git push`

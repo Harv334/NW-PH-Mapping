@@ -22,7 +22,15 @@ Ward 2024, GP practice, postcode.
 | `Wards_May_2024_Boundaries_UK_BFC_V2` (GeoJSON) | ONS Open Geography Portal | https://geoportal.statistics.gov.uk/datasets/ons::wards-may-2024-boundaries-uk-bfc-v2 | Ward polygons (`GJ` in `index.html`) |
 | `LSOA_2021_EW_BFC_V3` (GeoJSON) | ONS Open Geography Portal | https://geoportal.statistics.gov.uk/datasets/ons::lsoa-december-2021-ew-bfc-v3 | LSOA polygons (`LSOA_IMD` in `index.html`) |
 | `Local_Authority_Districts_Boundaries_UK_BFC` (GeoJSON) | ONS Open Geography Portal | https://geoportal.statistics.gov.uk/datasets/ons::local-authority-districts-may-2024-boundaries-uk-bfc | Borough outlines (`BOROUGH_GJ`) |
-| `ONSPD_*.zip` — ONS Postcode Directory | ONS Open Geography Portal | https://geoportal.statistics.gov.uk (search "ONS Postcode Directory") | Postcode → LSOA / ward / borough lookup. Use the most recent quarterly release. |
+| postcodes.io bulk API (no download) | postcodes.io, over the ONS Postcode Directory | https://api.postcodes.io/postcodes (POST, up to 100 postcodes per request) | Postcode → LSOA 2021 / ward / borough + coordinates, for GP practices, pharmacies, hospitals and charity HQs. Replaces the ONSPD zip. |
+| `LSOA21_WD25_LAD25_EW_LU_v2` (no download) | ONS Open Geography Portal feature service | https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/LSOA21_WD25_LAD25_EW_LU_v2/FeatureServer/0/query | Official LSOA 2021 → ward 2025 → LAD 2025 best-fit lookup. Every LSOA-derived ward indicator is aggregated through it. |
+
+> **On the retired ONSPD download.** The pipeline used to need the ~250 MB
+> quarterly ONS Postcode Directory zip for two jobs: geocoding postcodes,
+> and inferring each LSOA's ward from the modal ward of its postcodes. The
+> first is now the postcodes.io API, which serves the same ONSPD fields;
+> the second is now the ONS best-fit lookup, which is the authoritative
+> answer rather than an inference. Neither needs a manual download.
 
 > **Trim to NWL**: filter each GeoJSON by LAD25CD / LAD24CD in the
 > borough set above before embedding in the map to keep file size down.
@@ -232,7 +240,8 @@ one CSV per force per month.
 
 To rebuild from scratch, a colleague needs:
 
-1. **Boundaries** — 3 GeoJSONs from ONS (wards, LSOAs, LADs) + latest ONSPD ZIP.
+1. **Boundaries**: 3 GeoJSONs from ONS (wards, LSOAs, LADs). Postcode and
+   LSOA-to-ward geography come from APIs, so there is nothing to download.
 2. **IMD 2025** — 1 CSV (File 7).
 3. **Census** — 15 ZIPs from NOMIS (one per TS table listed in §3).
 4. **Claimant + DWP** — 6 CSVs via NOMIS bulk (claimant + 5 DWP).
@@ -252,6 +261,7 @@ equivalent open licence.
 | Source | Updated | How often to refresh |
 |--------|---------|----------------------|
 | ONS boundaries | Annually (May) | Once a year |
+| postcodes.io / ONS best-fit lookup | Quarterly / annually | Automatic. Cached misses are re-checked every 90 days; bump `ONS_LOOKUP_LAYER` when the ward vintage moves past 2025 |
 | IMD | ~Every 6 years (last 2019 → 2025) | As and when released |
 | Census 2021 | One-off decennial | Fixed — refreshes in ~2031 |
 | NOMIS claimant / DWP | Monthly | Monthly |
