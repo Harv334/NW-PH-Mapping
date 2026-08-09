@@ -197,7 +197,7 @@ counts and as percentages).
 
 | File | Source | URL | Used for |
 |------|--------|-----|----------|
-| `epraccur.zip` (GP practices) | NHS Digital / NHS England ODS | https://files.digital.nhs.uk/assets/ods/current/epraccur.zip | GP practice names, postcodes, status. Join to postcode → ward lookup. **This URL now returns 403**: the bulk-zip route has been retired. The live equivalent is `https://www.odsdatasearchandexport.nhs.uk/api/getReport?report=epraccur` (plain CSV, no zip). Phase 1.3 should adopt it. |
+| `epraccur` extract (GP practices, no download) | NHS ODS Data Search and Export | https://www.odsdatasearchandexport.nhs.uk/api/getReport?report=epraccur | GP practice names, postcodes, status. Join to postcode → ward lookup. Fetched by the pipeline and revalidated by ETag. The former bulk-zip URL `https://files.digital.nhs.uk/assets/ods/current/epraccur.zip` now returns 403; that whole route has been retired. |
 | GP list-size / registered patients CSV | NHS Digital — "Patients Registered at a GP Practice" | https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice | Sizes the GP marker on the map. Download the monthly "gp-reg-pat-prac-all.csv". |
 | `edispensary` extract (pharmacies, no download) | NHS ODS Data Search and Export | https://www.odsdatasearchandexport.nhs.uk/api/getReport?report=edispensary | Pharmacy name + postcode. Headerless 27-column ODS CSV, same layout as epraccur. Fetched by the pipeline and revalidated by ETag. |
 | NHS.uk GP / Dentist JSON datasets | NHS.uk | https://www.nhs.uk/about-us/nhs-website-datasets/ | Dentist and pharmacy pins; also has opening hours + services. Requires free sign-up. |
@@ -248,8 +248,8 @@ To rebuild from scratch, a colleague needs:
 5. **Fuel poverty** — 1 DESNZ XLSX.
 6. **Green/blue space access** — 1 Defra ODS (≈46 MB zipped, 1.37 GB uncompressed).
 7. **QOF** — 16 CSVs from Fingertips (one per indicator).
-8. **GP / pharmacy**: 2 files, `epraccur.zip` and the GP registered-patients
-   CSV. The pharmacy register is fetched from the ODS API, not downloaded.
+8. **GP / pharmacy**: 1 file, the GP registered-patients CSV. Both the GP
+   practice and pharmacy registers are fetched from the ODS API.
 9. **VCSE** — 3 Charity Commission JSON ZIPs.
 10. **Crime** — Last 12 monthly ZIPs from data.police.uk for Met + City forces.
 
@@ -269,8 +269,7 @@ equivalent open licence.
 | OHID Fingertips / QOF | Annually | Annually (usually Oct) |
 | Fuel poverty | Annually (Feb–Mar) | Annually |
 | Defra green/blue space access | Not yet set (first release Mar 2026) | Watch landing page — status is "in development" |
-| NHS ODS (pharmacies) | Monthly | Automatic. The pipeline revalidates by ETag on every run and re-downloads only when the extract actually changes |
-| NHS ODS (GP practices) | Monthly | Manual until Phase 1.3 |
+| NHS ODS (GP practices + pharmacies) | Monthly | Automatic. The pipeline revalidates by ETag on every run and re-downloads only when the extract actually changes |
 | Charity Commission | Monthly | Monthly |
 | Crime (police.uk) | Monthly (3-month lag) | Quarterly is enough |
 

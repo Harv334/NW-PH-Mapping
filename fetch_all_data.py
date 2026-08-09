@@ -19,11 +19,6 @@ from open APIs on the fly.
       Index of Multiple Deprivation 2025 - File 7 (all domains).
       https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025
 
-  .cache/gp_practices/epraccur.zip                (~700 KB, required)
-      NHS ODS GP practice register. Download from
-      https://digital.nhs.uk/services/organisation-data-service/export-data-files/csv-downloads/gp-and-gp-practice-related-data
-      (click the 'epraccur.zip' link)
-
   .cache/hospitals/Hospital.csv                   [optional]
       NHS.uk dataset. https://www.nhs.uk/about-us/nhs-website-datasets/
       If missing, hospitals simply won't render on the map.
@@ -34,7 +29,8 @@ No cache needed - the script hits these APIs directly (cached between runs):
   - Nomis Census 2021    (topic-summary tables, ~150 MB first run, cached)
   - postcodes.io         (postcode -> LSOA / ward / borough + coordinates)
   - ONS Open Geography   (LSOA 2021 -> ward 2025 best-fit lookup)
-  - NHS ODS Data Search  (edispensary pharmacy register; ETag-revalidated)
+  - NHS ODS Data Search  (epraccur GP + edispensary pharmacy registers,
+                          both ETag-revalidated so an unchanged file is a 304)
 
 ------------------------------------------------------------------------------
 USAGE
@@ -302,8 +298,9 @@ def _http_bytes(url: str, *, source: str, headers: dict | None = None,
     )
 
 def _validate_ods_extract(raw: bytes, *, source: str, report: str,
-                          code_prefix: str, role_codes: set[str],
-                          min_active: int) -> int:
+                          role_codes: set[str], min_active: int,
+                          code_prefix: str | None = None,
+                          marker: tuple[int, str, int] | None = None) -> int:
     """
     Check a downloaded ODS extract really is the report we asked for, and return
     its active-row count.
@@ -314,6 +311,13 @@ def _validate_ods_extract(raw: bytes, *, source: str, report: str,
     one place and quietly corrupt postcodes. Likewise all ODS reports share this
     layout, so a wrong `report` code returns a perfectly well-formed file of the
     wrong organisations.
+
+    `code_prefix` is the leading character every organisation code should carry,
+    where the report has one (pharmacies are all F...; GP practices are spread
+    across many letters, so they identify themselves by `marker` instead).
+    `marker` is an optional (field index, substring, minimum row count) triple
+    naming a value that must appear in the extract for it to be the report we
+    asked for.
     """
     try:
         rows = [r for r in csv.reader(io.StringIO(raw.decode("latin-1"), newline="")) if r]
@@ -340,14 +344,25 @@ def _validate_ods_extract(raw: bytes, *, source: str, report: str,
             f"reads it headerless ({ODS_EXPORT_URL.format(report=report)})"
         )
 
-    codes = [r[0] for r in rows if r[0]]
-    pct_prefix = sum(c.startswith(code_prefix) for c in codes) / max(len(codes), 1)
-    if pct_prefix < 0.90:
-        raise RuntimeError(
-            f"{source}: only {pct_prefix:.0%} of organisation codes in the "
-            f"'{report}' extract start with '{code_prefix}' - this looks like a "
-            f"different ODS report ({ODS_EXPORT_URL.format(report=report)})"
-        )
+    if code_prefix:
+        codes = [r[0] for r in rows if r[0]]
+        pct_prefix = sum(c.startswith(code_prefix) for c in codes) / max(len(codes), 1)
+        if pct_prefix < 0.90:
+            raise RuntimeError(
+                f"{source}: only {pct_prefix:.0%} of organisation codes in the "
+                f"'{report}' extract start with '{code_prefix}' - this looks like a "
+                f"different ODS report ({ODS_EXPORT_URL.format(report=report)})"
+            )
+    if marker:
+        idx, needle, min_count = marker
+        hits = sum(needle in r[idx] for r in rows if len(r) > idx)
+        if hits < min_count:
+            raise RuntimeError(
+                f"{source}: only {hits:,} rows of the '{report}' extract carry "
+                f"'{needle}' in field {idx} (expected at least {min_count:,}) - "
+                f"this looks like a different ODS report "
+                f"({ODS_EXPORT_URL.format(report=report)})"
+            )
     pct_role = sum(r[13] in role_codes for r in rows) / len(rows)
     if pct_role < 0.90:
         raise RuntimeError(
@@ -366,8 +381,9 @@ def _validate_ods_extract(raw: bytes, *, source: str, report: str,
     return active
 
 def fetch_ods_report(report: str, cache: Path, *, source: str,
-                     code_prefix: str, role_codes: set[str],
-                     min_active: int) -> Path:
+                     role_codes: set[str], min_active: int,
+                     code_prefix: str | None = None,
+                     marker: tuple[int, str, int] | None = None) -> Path:
     """
     Refresh a cached ODS extract from the Data Search and Export API.
 
@@ -395,7 +411,7 @@ def fetch_ods_report(report: str, cache: Path, *, source: str,
             return cache
         active = _validate_ods_extract(
             r.content, source=source, report=report, code_prefix=code_prefix,
-            role_codes=role_codes, min_active=min_active,
+            role_codes=role_codes, min_active=min_active, marker=marker,
         )
         write_bytes_atomic(cache, r.content)
         etag = r.headers.get("ETag", "")
@@ -736,32 +752,42 @@ def run_gp_practices() -> pd.DataFrame:
     rule("GP practices (NHS ODS EPRACCUR)")
     cache_dir = CACHE_DIR / "gp_practices"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache = cache_dir / "epraccur.zip"
+    cache = cache_dir / "epraccur.csv"
+    legacy_zip = cache_dir / "epraccur.zip"
 
-    if not cache.exists():
-        url = "https://files.digital.nhs.uk/assets/ods/current/epraccur.zip"
-        info("No local cache — trying direct download (often 403s from Cloudflare)")
-        sess = browser_session(referer=(
-            "https://digital.nhs.uk/services/organisation-data-service/"
-            "export-data-files/csv-downloads/gp-and-gp-practice-related-data"
-        ))
-        r = sess.get(url, timeout=60, allow_redirects=True)
-        if r.status_code != 200:
-            raise RuntimeError(
-                f"EPRACCUR download blocked (HTTP {r.status_code}).\n"
-                "Open https://digital.nhs.uk/services/organisation-data-service/"
-                "export-data-files/csv-downloads/gp-and-gp-practice-related-data "
-                f"in a browser, click 'epraccur.zip', and drop the file at {cache}"
-            )
-        cache.write_bytes(r.content)
+    # GP practices are spread across many organisation-code letters, so unlike
+    # pharmacies they cannot be identified by a code prefix. Subtype B/Z plus a
+    # floor on RO76 (the ODS role code for a GP practice) pins the report down:
+    # the neighbouring extracts either carry no subtype at all (ebranchs,
+    # epharmacyhq) or use different subtype values entirely (egpcur).
+    try:
+        fetch_ods_report(
+            "epraccur", cache, source="gp_practices",
+            role_codes={"B", "Z"}, min_active=10_000,
+            marker=(EPRACCUR_HEADER.index("PrescribingSetting"), "RO76", 5_000),
+        )
+        src = cache
+    except Exception:
+        # An install predating this change may still hold the retired zip.
+        # Prefer stale-but-real data over failing the whole source.
+        if not legacy_zip.exists():
+            raise
+        warn(f"gp_practices: falling back to the legacy {legacy_zip.name}")
+        src = legacy_zip
 
-    with zipfile.ZipFile(cache) as z:
-        with z.open("epraccur.csv") as f:
-            df = pd.read_csv(
-                io.TextIOWrapper(f, encoding="latin-1"),
-                header=None, names=EPRACCUR_HEADER,
-                dtype=str, keep_default_na=False,
-            )
+    if src.suffix == ".zip":
+        with zipfile.ZipFile(src) as z:
+            with z.open("epraccur.csv") as f:
+                df = pd.read_csv(
+                    io.TextIOWrapper(f, encoding="latin-1"),
+                    header=None, names=EPRACCUR_HEADER,
+                    dtype=str, keep_default_na=False,
+                )
+    else:
+        df = pd.read_csv(
+            src, header=None, names=EPRACCUR_HEADER,
+            dtype=str, keep_default_na=False, encoding="latin-1",
+        )
 
     # Active only. Then filter to actual GP practices (not branches/clinics).
     # Handles three EPRACCUR shipping formats:
