@@ -10,14 +10,16 @@ Produces the three JSON files consumed by index.html:
 Plus it re-splices the GPS and HOSP constants inside index.html.
 
 ------------------------------------------------------------------------------
-MANUAL DOWNLOADS  (do this once, then rerun the script any time)
+MANUAL DOWNLOADS  (none are required for a normal run)
 ------------------------------------------------------------------------------
-Drop the following files in the .cache/ folder. Everything else is fetched
-from open APIs on the fly.
+Everything is either fetched from an open API or committed to the repo. The
+only files you can drop in .cache/ are these, and both are optional:
 
-  .cache/imd2025/File_7_IoD2025_All_Ranks_...csv  (~10 MB, required)
-      Index of Multiple Deprivation 2025 - File 7 (all domains).
-      https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025
+  .cache/imd2025/File_7_IoD2025_All_Ranks_...csv  [only to rebuild]
+      Index of Multiple Deprivation 2025 - File 7 (all domains). IMD is static
+      between releases, so data/demographics/imd2025.parquet is committed and
+      used as-is. Drop the raw CSV here only when a new IoD is published and
+      the parquet needs regenerating. See IMD_SOURCE_URL below.
 
   .cache/hospitals/Hospital.csv                   [optional]
       NHS.uk dataset. https://www.nhs.uk/about-us/nhs-website-datasets/
@@ -942,32 +944,63 @@ def run_pharmacies() -> pd.DataFrame:
 # ============================================================================
 # SOURCE 3: IMD 2025  (MHCLG, LSOA-level, all 7 domains)
 # ============================================================================
-IMD_DEFAULT_URL = (
+# IMD 2025 is a one-off publication: the previous release was 2019 and the next
+# is years away. Rather than depend on a gov.uk asset URL whose media hash
+# rotates every release, the filtered parquet is committed and is the source of
+# truth. The raw file is only needed to regenerate it when a new IoD lands.
+#
+# Source: MHCLG, English Indices of Deprivation 2025, File 7 (All Ranks,
+# Scores, Deciles and Population Denominators).
+#   Landing page: https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025
+#   File 7 as published (the media hash changes each release, so treat the
+#   landing page above as authoritative if this 404s):
+IMD_SOURCE_URL = (
     "https://assets.publishing.service.gov.uk/media/"
     "691ded56d140bbbaa59a2a7d/"
     "File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv"
 )
+IMD_LANDING_URL = (
+    "https://www.gov.uk/government/statistics/"
+    "english-indices-of-deprivation-2025"
+)
+# Filtering applied to produce data/demographics/imd2025.parquet:
+#   rows    - every English LSOA 2021 in File 7 that carries an LSOA code
+#             (33,755; no geographic subsetting, since lsoa_data.json is
+#             full-England and the NWL scoping happens downstream)
+#   columns - 11 of File 7's ~60: LSOA21CD, the overall IMD score, decile and
+#             rank, and the seven domain scores. Population denominators and
+#             the per-domain ranks and deciles are dropped as unused.
 
 def run_imd2025() -> pd.DataFrame:
     rule("IMD 2025 (MHCLG)")
+    out_path = DATA_DIR / "demographics" / "imd2025.parquet"
     cache_dir = CACHE_DIR / "imd2025"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Prefer local cache. If both a CSV (File 7, all domains) and XLSX (File 1,
+    # A raw File 7 in .cache/ means "regenerate" - that is how a new IoD release
+    # gets picked up. If both a CSV (File 7, all domains) and an XLSX (File 1,
     # ranks only) are present, pick the larger one.
     candidates = sorted(
         [*cache_dir.glob("*.csv"), *cache_dir.glob("*.xlsx")],
         key=lambda p: p.stat().st_size, reverse=True,
     )
-    if candidates:
-        src = candidates[0]
-    else:
-        info("No local cache — downloading File 7 CSV")
-        url = os.environ.get("IMD_2025_URL", IMD_DEFAULT_URL)
-        src = cache_dir / "imd2025.csv"
-        r = requests.get(url, timeout=120, headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-        src.write_bytes(r.content)
+    if not candidates:
+        if out_path.exists():
+            out = pd.read_parquet(out_path)
+            ok(f"imd2025: {len(out):,} LSOAs from the committed parquet "
+               "(static between releases; no download needed)")
+            return out
+        raise RuntimeError(
+            "imd2025: no committed parquet at "
+            f"{out_path} and no raw file in {cache_dir}.\n"
+            "IMD 2025 is static between releases and normally ships with the "
+            "repo. To rebuild it, download File 7 (All Ranks, Scores, Deciles "
+            f"and Population Denominators) from {IMD_LANDING_URL} "
+            f"(direct link at time of writing: {IMD_SOURCE_URL}) "
+            f"and drop the CSV in {cache_dir}."
+        )
+    src = candidates[0]
+    info(f"imd2025: rebuilding the parquet from {src.name}")
 
     if src.suffix.lower() in (".xlsx", ".xls"):
         xl = pd.ExcelFile(src)
@@ -1026,8 +1059,20 @@ def run_imd2025() -> pd.DataFrame:
         "environment_score": num(env_col),
     }).dropna(subset=["LSOA21CD"])
 
-    out_path = DATA_DIR / "demographics" / "imd2025.parquet"
-    write_parquet_atomic(out_path, out)
+    # Parquet does not serialise byte-identically across runs, so rewriting an
+    # unchanged frame would show up as a modified binary in git on every run of
+    # a source that is static by definition. Only write when the data moved.
+    if out_path.exists():
+        try:
+            previous = pd.read_parquet(out_path)
+        except Exception:
+            previous = None
+        if previous is not None and previous.equals(out):
+            ok(f"imd2025: {len(out):,} LSOAs, unchanged from the committed "
+               "parquet (not rewritten)")
+            return out
+
+    out = write_parquet_guarded(out_path, out, source="imd2025")
     ok(f"imd2025: {len(out):,} LSOAs -> {out_path.relative_to(REPO_ROOT)}")
     return out
 

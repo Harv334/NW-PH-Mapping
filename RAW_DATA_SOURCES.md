@@ -41,12 +41,20 @@ Ward 2024, GP practice, postcode.
 
 | File | Source | URL | Used for |
 |------|--------|-----|----------|
-| `File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv` | MHCLG | https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025 | IMD score + decile + all 7 domain scores at LSOA 2021 level. This is the single richest source — File 7 gives every domain in one CSV. |
+| `File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv` | MHCLG | https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025 | IMD score + decile + all 7 domain scores at LSOA 2021 level. This is the single richest source: File 7 gives every domain in one CSV. **Not downloaded at run time.** IMD is static between releases, so the filtered output is committed as `data/demographics/imd2025.parquet` and used as the source of truth. Drop the raw CSV in `.cache/imd2025/` only to regenerate it after a new IoD release. |
 
 Domains pulled from this file: Income, Employment, Education &
 Skills, Health Deprivation & Disability, Crime, Barriers to Housing
 & Services, Living Environment. Plus the overall IMD score / decile /
 rank.
+
+**Filtering applied to the committed parquet.** Rows: every English LSOA
+2021 in File 7 carrying an LSOA code (33,755). There is no geographic
+subsetting, because `lsoa_data.json` is full-England and the NWL scoping
+happens downstream. Columns: 11 of File 7's ~60, being `LSOA21CD`, the
+overall IMD score / decile / rank, and the seven domain scores. The
+population denominators and the per-domain ranks and deciles are dropped
+as unused.
 
 ---
 
@@ -242,7 +250,8 @@ To rebuild from scratch, a colleague needs:
 
 1. **Boundaries**: 3 GeoJSONs from ONS (wards, LSOAs, LADs). Postcode and
    LSOA-to-ward geography come from APIs, so there is nothing to download.
-2. **IMD 2025** — 1 CSV (File 7).
+2. **IMD 2025**: nothing. The filtered parquet is committed; the raw File 7
+   CSV is only needed to regenerate it after a new IoD release.
 3. **Census** — 15 ZIPs from NOMIS (one per TS table listed in §3).
 4. **Claimant + DWP** — 6 CSVs via NOMIS bulk (claimant + 5 DWP).
 5. **Fuel poverty** — 1 DESNZ XLSX.

@@ -26,15 +26,29 @@ Live map: https://harv334.github.io/NW-PH-Mapping/
 pip install pandas pyarrow requests pyproj shapely
 ```
 
-Then drop these files into `.cache/`. All are free, public downloads.
+That is the whole setup. **No manual downloads are required** - every source
+is either fetched from an open API or committed to the repo.
 
-| File | Where to drop it | Source |
-|------|------------------|--------|
-| **IMD 2025 File 7 CSV** (required, ~10 MB) | `.cache/imd2025/*.csv` | https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025 - File 7 (all ranks/scores/deciles) |
-| Hospital CSV (optional) | `.cache/hospitals/Hospital.csv` | https://www.nhs.uk/about-us/nhs-website-datasets/ |
+Two files are optional, and only if you want them:
+
+| File | Where to drop it | Why you might |
+|------|------------------|---------------|
+| IMD File 7 CSV | `.cache/imd2025/*.csv` | Only to regenerate the committed IMD parquet after a new IoD release. See below. |
+| Hospital CSV | `.cache/hospitals/Hospital.csv` | Adds hospital markers to the map. https://www.nhs.uk/about-us/nhs-website-datasets/ |
 
 OHID Fingertips (health outcomes) and police.uk (crime) are API-backed -
 the script hits them directly the first time and caches the responses.
+
+Deprivation is committed, not downloaded. IMD 2025 is static between releases
+(the previous one was 2019), and the gov.uk asset URL carries a media hash that
+changes every release, so `data/demographics/imd2025.parquet` ships with the
+repo and is used as-is. It holds 33,755 English LSOAs and 11 columns: the LSOA
+code, the overall IMD score, decile and rank, and the seven domain scores.
+To rebuild it after a new IoD is published, download File 7 (All Ranks, Scores,
+Deciles and Population Denominators) from
+https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025
+into `.cache/imd2025/` and rerun `--only imd`; the pipeline prefers a raw file
+over the parquet whenever one is present.
 
 The GP practice and pharmacy registers are API-backed. `fetch_all_data.py`
 pulls the NHS ODS `epraccur` and `edispensary` extracts from the ODS Data
@@ -91,10 +105,10 @@ For someone who just wants to refresh the map:
 
 1. Clone the repo.
 2. `pip install pandas pyarrow requests pyproj shapely`
-3. Download the one required file listed in the table above and drop it
-   into its `.cache/` subfolder.
-4. `python fetch_all_data.py`
-5. `git commit -am "data refresh YYYY-MM" && git push`
+3. `python fetch_all_data.py`
+4. `git commit -am "data refresh YYYY-MM" && git push`
+
+No downloads, no accounts, no API keys.
 
 That's it. The script has a long docstring at the top restating every
 download URL in case this README ever goes stale.
