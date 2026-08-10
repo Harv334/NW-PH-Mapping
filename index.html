@@ -300,6 +300,18 @@
 </style>
 </head>
 <body>
+<div id="moved-banner" style="position:fixed;top:0;left:0;right:0;z-index:99999;
+  background:#1a1a1a;color:#fff;font:14px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;
+  padding:10px 16px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.3)">
+  This map has moved and now covers all 33 London boroughs.
+  <a href="https://pophealth.uk" style="color:#7db8ff;font-weight:600">Go to pophealth.uk</a>
+  <span style="opacity:.6">&nbsp;This page is the archived North West London version.</span>
+</div>
+<script>document.addEventListener('DOMContentLoaded',function(){
+  var b=document.getElementById('moved-banner');
+  if(b) document.body.style.paddingTop=b.offsetHeight+'px';
+});</script>
+
 
 <div class="app">
 

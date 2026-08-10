@@ -1,3 +1,15 @@
+> # This project has moved
+>
+> **The live map is now at https://pophealth.uk**
+>
+> It covers all 33 London boroughs rather than the eight of North West London:
+> 704 wards, 4,994 LSOAs, and the same open NHS and government sources.
+>
+> Development continues at
+> [Harv334/pophealthmap](https://github.com/Harv334/pophealthmap). This
+> repository is kept as the archive of the North West London version and is no
+> longer updated.
+
 # NW London Population Health Mapping
 
 Interactive Leaflet map + a single-file Python script that refreshes it.
